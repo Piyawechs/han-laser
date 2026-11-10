@@ -1,0 +1,21 @@
+{
+  "_comment": "คัดลอกเป็น config.json แล้วแก้ path ให้ตรงกับเครื่องมาร์ก",
+
+  "marking_exe": "C:/HansLaser/MarkingControl/Marking.exe",
+  "template": "templates/product.hlp",
+  "launch_args": ["{template}"],
+
+  "serial_txt": "C:/HansLaser/serial/serial.txt",
+  "txt_encoding": "utf-8",
+  "txt_newline": "\r\n",
+
+  "serial_format": "{prefix}{seq:04d}",
+  "prefix": "CB",
+  "seq_start": 1,
+  "seq_max": 9999,
+  "seq_reset": "never",
+
+  "state_file": "data/state.json",
+  "history_csv": "data/history.csv",
+  "archive_dir": "data/archive"
+}
