@@ -32,9 +32,9 @@ PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "never": "all"}
 
 @dataclass
 class Config:
-    marking_exe: str
-    template: str
+    template: str                     # ไฟล์ .hs (HS.Document)
     serial_txt: str
+    marking_exe: str = ""             # ว่าง = เปิด .hs ด้วยโปรแกรมที่ Windows ผูกไว้
     serial_format: str = "{prefix}{date:%y%m}{seq:04d}"
     prefix: str = "CB"
     seq_start: int = 1
@@ -178,14 +178,22 @@ def generate(cfg: Config, count: int, lot: str = "", now: datetime | None = None
     return serials
 
 
-def launch(cfg: Config) -> subprocess.Popen:
+def launch(cfg: Config) -> str:
+    """เปิด template คืนค่าข้อความบอกว่าเปิดด้วยอะไร"""
+    if not Path(cfg.template).exists():
+        raise FileNotFoundError(f"ไม่พบ template: {cfg.template}")
+    if not cfg.marking_exe:
+        # .hs ผูกกับโปรแกรม Han's ไว้แล้ว เหมือนดับเบิลคลิกไฟล์
+        if not hasattr(os, "startfile"):
+            raise OSError("เปิดแบบไม่ระบุ marking_exe ได้เฉพาะบน Windows")
+        os.startfile(cfg.template)
+        return "โปรแกรมที่ผูกกับ .hs"
     exe = Path(cfg.marking_exe)
     if not exe.exists():
         raise FileNotFoundError(f"ไม่พบโปรแกรมมาร์ก: {exe}")
-    if not Path(cfg.template).exists():
-        raise FileNotFoundError(f"ไม่พบ template: {cfg.template}")
     args = [a.format(template=cfg.template, serial_txt=cfg.serial_txt) for a in cfg.launch_args]
-    return subprocess.Popen([str(exe), *args], cwd=str(exe.parent))
+    subprocess.Popen([str(exe), *args], cwd=str(exe.parent))
+    return str(exe)
 
 
 # ---------------------------------------------------------------- CLI
@@ -210,8 +218,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"สร้าง {len(serials)} serial: {serials[0]} .. {serials[-1]}")
             print(f"เขียนลง {cfg.serial_txt}")
         if args.cmd in ("launch", "run"):
-            launch(cfg)
-            print(f"เปิด {cfg.marking_exe} พร้อม {cfg.template}")
+            how = launch(cfg)
+            print(f"เปิด {cfg.template} ด้วย {how}")
         if args.cmd == "status":
             state = load_state(Path(cfg.state_file))
             now = datetime.now()

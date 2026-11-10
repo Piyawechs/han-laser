@@ -6,10 +6,17 @@
 ## ติดตั้ง (บน Windows PC ที่ต่อกับเครื่องมาร์ก)
 - Python 3.9 ขึ้นไป ไม่ต้องติดตั้ง package เพิ่ม
 - `copy config.example.json config.json` แล้วแก้ค่า:
-  - `marking_exe`: path ของโปรแกรม Han's
-  - `template`: ไฟล์ template
+  - `template`: ไฟล์ template `.hs` เช่น `C:/Users/Administrator/Desktop/Back up/test2.hs`
+  - `marking_exe`: เว้นว่างได้ ถ้าว่างจะเปิด `.hs` ด้วยโปรแกรมที่ Windows ผูกไว้ (HS Microsoft) เหมือนดับเบิลคลิกไฟล์
   - `serial_txt`: ไฟล์ .txt ที่ตั้งไว้ใน template
   - `serial_format`, `prefix`: รูปแบบ serial
+
+## ตั้งค่า template ใน Han's (ทำครั้งเดียว)
+1. ดับเบิลคลิก object barcode หรือ text เพื่อเปิด Barcode setup → เลือก **Serial** → กด **Set...**
+2. ในหน้า Serial setup เลือก **Obtained from files (Each Line)** → กด **Set...** → เลือกไฟล์ `serial.txt` (ไฟล์เดียวกับ `serial_txt` ใน config)
+3. กด OK แล้ว Save template (.hs)
+
+(ถ้าเลือก **Obtained from files (First Line)** จะอ่านแค่บรรทัดแรกทุกครั้งที่มาร์ก)
 
 ## ใช้งาน
 ```

@@ -1,11 +1,12 @@
 {
-  "_comment": "คัดลอกเป็น config.json แล้วแก้ path ให้ตรงกับเครื่องมาร์ก",
+  "_comment": "คัดลอกเป็น config.json แล้วแก้ path ให้ตรงกับเครื่องมาร์ก (ใช้ / หรือ \\\\ ใน path)",
 
-  "marking_exe": "C:/HansLaser/MarkingControl/Marking.exe",
-  "template": "templates/product.hlp",
+  "template": "C:/Users/Administrator/Desktop/Back up/test2.hs",
+  "_comment_exe": "marking_exe ว่าง = เปิด .hs ด้วยโปรแกรมที่ Windows ผูกไว้ (HS Microsoft) เหมือนดับเบิลคลิก",
+  "marking_exe": "",
   "launch_args": ["{template}"],
 
-  "serial_txt": "C:/HansLaser/serial/serial.txt",
+  "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial.txt",
   "txt_encoding": "utf-8",
   "txt_newline": "\r\n",
 
