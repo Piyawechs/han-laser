@@ -24,6 +24,9 @@ from pathlib import Path
 
 DEFAULT_CONFIG = "config.json"
 
+# seq_reset -> รูปแบบ strftime ของรอบ (never = รอบเดียวตลอด)
+PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "never": "all"}
+
 
 # ---------------------------------------------------------------- config
 
@@ -32,11 +35,11 @@ class Config:
     marking_exe: str
     template: str
     serial_txt: str
-    serial_format: str = "{prefix}{date:%y%m%d}{seq:04d}"
-    prefix: str = ""
+    serial_format: str = "{prefix}{date:%y%m}{seq:04d}"
+    prefix: str = "CB"
     seq_start: int = 1
     seq_max: int = 9999
-    seq_reset: str = "daily"          # "daily" | "never"
+    seq_reset: str = "monthly"        # "daily" | "monthly" | "never"
     txt_encoding: str = "utf-8"
     txt_newline: str = "\r\n"
     launch_args: list = field(default_factory=lambda: ["{template}"])
@@ -60,8 +63,8 @@ class Config:
             p = Path(getattr(cfg, name))
             if not p.is_absolute():
                 setattr(cfg, name, str(base / p))
-        if cfg.seq_reset not in ("daily", "never"):
-            raise ValueError("seq_reset ต้องเป็น 'daily' หรือ 'never'")
+        if cfg.seq_reset not in PERIOD_FORMATS:
+            raise ValueError(f"seq_reset ต้องเป็นหนึ่งใน {list(PERIOD_FORMATS)}")
         return cfg
 
 
@@ -113,9 +116,14 @@ def append_history(path: Path, rows: list[dict]) -> None:
 
 # ---------------------------------------------------------------- core
 
-def next_seq(cfg: Config, state: dict, today: str) -> int:
+def period_key(cfg: Config, now: datetime) -> str:
+    """รอบของเลขลำดับ เปลี่ยนรอบเมื่อไรเลขลำดับเริ่มที่ seq_start ใหม่"""
+    return now.strftime(PERIOD_FORMATS[cfg.seq_reset])
+
+
+def next_seq(cfg: Config, state: dict, now: datetime) -> int:
     """เลขลำดับตัวถัดไป (ยังไม่บันทึก)"""
-    if not state or (cfg.seq_reset == "daily" and state.get("date") != today):
+    if not state or state.get("period") != period_key(cfg, now):
         return cfg.seq_start
     return state["last_seq"] + 1
 
@@ -137,11 +145,10 @@ def generate(cfg: Config, count: int, lot: str = "", now: datetime | None = None
     if count < 1:
         raise ValueError("count ต้องมากกว่า 0")
     now = now or datetime.now()
-    today = now.strftime("%Y-%m-%d")
     state_path = Path(cfg.state_file)
     state = load_state(state_path)
 
-    start = next_seq(cfg, state, today)
+    start = next_seq(cfg, state, now)
     serials = make_serials(cfg, count, start, now)
 
     dup_in_batch = len(set(serials)) != len(serials)
@@ -166,7 +173,7 @@ def generate(cfg: Config, count: int, lot: str = "", now: datetime | None = None
     stamp = now.isoformat(timespec="seconds")
     append_history(Path(cfg.history_csv),
                    [{"generated_at": stamp, "lot": lot, "serial": s} for s in serials])
-    save_state(state_path, {"date": today, "last_seq": start + count - 1,
+    save_state(state_path, {"period": period_key(cfg, now), "last_seq": start + count - 1,
                             "last_lot": lot, "updated_at": stamp})
     return serials
 
@@ -208,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "status":
             state = load_state(Path(cfg.state_file))
             now = datetime.now()
-            seq = next_seq(cfg, state, now.strftime("%Y-%m-%d"))
+            seq = next_seq(cfg, state, now)
             print("state:", json.dumps(state, ensure_ascii=False) if state else "(ยังไม่เคยสร้าง)")
             print("serial ตัวถัดไป:", cfg.serial_format.format(prefix=cfg.prefix, date=now, seq=seq))
     except (ValueError, FileNotFoundError, OSError) as e:

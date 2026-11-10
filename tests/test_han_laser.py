@@ -17,7 +17,6 @@ class GenerateTest(unittest.TestCase):
             "marking_exe": "marking.exe",
             "template": "t.hlp",
             "serial_txt": "out/serial.txt",
-            "prefix": "HL",
             "seq_max": 20,
         }
         (self.dir / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -32,19 +31,37 @@ class GenerateTest(unittest.TestCase):
 
     def test_one_serial_per_line_crlf(self):
         s = hl.generate(self.cfg, 3, "LOT1", now=self.day1)
-        self.assertEqual(s, ["HL2611100001", "HL2611100002", "HL2611100003"])
-        self.assertEqual(self.read_txt(), "HL2611100001\r\nHL2611100002\r\nHL2611100003\r\n")
+        self.assertEqual(s, ["CB26110001", "CB26110002", "CB26110003"])
+        self.assertEqual(self.read_txt(), "CB26110001\r\nCB26110002\r\nCB26110003\r\n")
 
     def test_continues_and_archives_previous(self):
         hl.generate(self.cfg, 2, now=self.day1)
         s = hl.generate(self.cfg, 2, now=self.day1.replace(hour=10))
-        self.assertEqual(s, ["HL2611100003", "HL2611100004"])
+        self.assertEqual(s, ["CB26110003", "CB26110004"])
         self.assertEqual(len(list(Path(self.cfg.archive_dir).iterdir())), 1)
 
+    def test_monthly_continues_across_days(self):
+        hl.generate(self.cfg, 2, now=self.day1)
+        s = hl.generate(self.cfg, 1, now=datetime(2026, 11, 30, 23, 0))
+        self.assertEqual(s, ["CB26110003"])
+
+    def test_monthly_reset_new_month(self):
+        hl.generate(self.cfg, 2, now=self.day1)
+        s = hl.generate(self.cfg, 1, now=datetime(2026, 12, 1, 8, 0))
+        self.assertEqual(s, ["CB26120001"])
+
     def test_daily_reset(self):
+        self.cfg.seq_reset = "daily"
+        self.cfg.serial_format = "{prefix}{date:%y%m%d}{seq:04d}"
         hl.generate(self.cfg, 2, now=self.day1)
         s = hl.generate(self.cfg, 1, now=datetime(2026, 11, 11, 8, 0))
-        self.assertEqual(s, ["HL2611110001"])
+        self.assertEqual(s, ["CB2611110001"])
+
+    def test_mismatched_reset_caught_as_duplicate(self):
+        self.cfg.serial_format = "{prefix}{seq:04d}"  # ไม่มีวันที่ แต่ reset รายเดือน
+        hl.generate(self.cfg, 2, now=self.day1)
+        with self.assertRaises(ValueError):
+            hl.generate(self.cfg, 1, now=datetime(2026, 12, 1, 8, 0))
 
     def test_seq_max_rejected_and_nothing_written(self):
         with self.assertRaises(ValueError):
@@ -52,7 +69,7 @@ class GenerateTest(unittest.TestCase):
         self.assertFalse(Path(self.cfg.serial_txt).exists())
 
     def test_duplicate_format_rejected(self):
-        self.cfg.serial_format = "{prefix}{date:%y%m%d}"
+        self.cfg.serial_format = "{prefix}{date:%y%m}"
         with self.assertRaises(ValueError):
             hl.generate(self.cfg, 2, now=self.day1)
 
@@ -68,7 +85,7 @@ class GenerateTest(unittest.TestCase):
         hl.generate(self.cfg, 2, "LOT9", now=self.day1)
         lines = Path(self.cfg.history_csv).read_text(encoding="utf-8").splitlines()
         self.assertEqual(lines[0], "generated_at,lot,serial")
-        self.assertEqual(lines[1], "2026-11-10T09:00:00,LOT9,HL2611100001")
+        self.assertEqual(lines[1], "2026-11-10T09:00:00,LOT9,CB26110001")
 
     def test_unknown_config_key(self):
         (self.dir / "bad.json").write_text(json.dumps({
