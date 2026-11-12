@@ -4,6 +4,10 @@ data/
 __pycache__/
 *.pyc
 *.png
+*.env
+dist/
+.venv/
+
 
 # ภาพหน้าจอไม่เก็บ แต่รูปตำแหน่งมาร์กของ product ต้องเก็บ
 !images/*.png
