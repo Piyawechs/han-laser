@@ -6,6 +6,10 @@
   "txt_encoding": "utf-8",
   "txt_newline": "\r\n",
   "last_product": "ceramic_box",
+  "_comment_lists": "รายการ dropdown หน้า Verify (แก้ในหน้า Settings) ตัวอย่างนี้เป็นค่าสมมติ",
+  "operators": ["EN001", "EN002"],
+  "shifts": ["A", "B", "C"],
+  "workorders": ["WO-TEST-001"],
 
   "products": {
     "ceramic_box": {

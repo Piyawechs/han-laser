@@ -25,6 +25,21 @@ CREATE TABLE IF NOT EXISTS serials (
 );
 CREATE INDEX IF NOT EXISTS ix_serials_product_period ON serials(product, period);
 CREATE INDEX IF NOT EXISTS ix_batches_created ON batches(created_at);
+CREATE INDEX IF NOT EXISTS ix_batches_lot ON batches(lot);
+CREATE TABLE IF NOT EXISTS verifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scanned_at TEXT NOT NULL,
+    raw_code   TEXT NOT NULL,
+    serial     TEXT NOT NULL,
+    product    TEXT NOT NULL DEFAULT '',
+    en         TEXT NOT NULL,
+    shift      TEXT NOT NULL,
+    workorder  TEXT NOT NULL,
+    result     TEXT NOT NULL,          -- PASS | FAIL
+    reason     TEXT NOT NULL DEFAULT '' -- '' | NOT_FOUND | WRONG_WORKORDER | DUPLICATE
+);
+CREATE INDEX IF NOT EXISTS ix_verif_serial ON verifications(serial, result);
+CREATE INDEX IF NOT EXISTS ix_verif_workorder ON verifications(workorder);
 """
 
 
@@ -91,6 +106,46 @@ class Store:
     def serials_of(self, batch_id: int) -> list[str]:
         return [r[0] for r in self.conn.execute(
             "SELECT serial FROM serials WHERE batch_id = ? ORDER BY seq", (batch_id,))]
+
+    def serial_info(self, serial: str) -> sqlite3.Row | None:
+        """serial นี้อยู่ batch/lot/product ไหน (None = ไม่เคย generate)"""
+        return self.conn.execute(
+            "SELECT s.serial, s.product, s.batch_id, b.lot FROM serials s JOIN batches b ON b.id = s.batch_id"
+            " WHERE s.serial = ?", (serial,)).fetchone()
+
+    def first_pass(self, serial: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM verifications WHERE serial = ? AND result = 'PASS' ORDER BY id LIMIT 1",
+            (serial,)).fetchone()
+
+    def add_verification(self, scanned_at: str, raw_code: str, serial: str, product: str, en: str,
+                         shift: str, workorder: str, result: str, reason: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO verifications (scanned_at, raw_code, serial, product, en, shift, workorder, result, reason)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scanned_at, raw_code, serial, product, en, shift, workorder, result, reason))
+        return cur.lastrowid
+
+    def list_verifications(self, workorder: str | None = None, limit: int = 300) -> list[sqlite3.Row]:
+        sql, args = "SELECT * FROM verifications", []
+        if workorder:
+            sql += " WHERE workorder = ?"
+            args.append(workorder)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        return self.conn.execute(sql, args).fetchall()
+
+    def workorder_stats(self, workorder: str) -> dict:
+        """จำนวนที่ generate ใน workorder นี้ และจำนวนที่ verify PASS แล้ว (นับ serial ไม่ซ้ำ)"""
+        generated = self.conn.execute(
+            "SELECT COALESCE(SUM(count), 0) FROM batches WHERE lot = ?", (workorder,)).fetchone()[0]
+        passed = self.conn.execute(
+            "SELECT COUNT(DISTINCT serial) FROM verifications WHERE workorder = ? AND result = 'PASS'",
+            (workorder,)).fetchone()[0]
+        failed = self.conn.execute(
+            "SELECT COUNT(*) FROM verifications WHERE workorder = ? AND result = 'FAIL'",
+            (workorder,)).fetchone()[0]
+        return {"generated": generated, "passed": passed, "failed": failed}
 
     # ------------------------------------------------------------ write (เรียกภายใน transaction)
 

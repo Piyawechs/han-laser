@@ -15,6 +15,7 @@ import han_laser as hl
 from store import Store
 from ui.common import ImageLabel, error
 from ui.engineer import LockPage, SetPasswordDialog, UnlockDialog
+from ui.verify_tab import VerifyTab
 from ui.settings_tab import SettingsTab
 
 
@@ -39,8 +40,10 @@ class GenerateTab(QWidget):
         self.next_lbl.setFont(f)
         self.next_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        self.lot = QLineEdit()
-        self.lot.setPlaceholderText("เช่น LOT001")
+        self.lot = QComboBox()                       # Workorder = Lot (รายการจาก Settings)
+        self.lot.setEditable(True)
+        self.lot.setInsertPolicy(QComboBox.NoInsert)
+        self.lot.lineEdit().setPlaceholderText("เลือก Workorder")
         self.count = QSpinBox()
         self.count.setRange(1, 9999)
         self.count.setValue(100)
@@ -64,7 +67,7 @@ class GenerateTab(QWidget):
         form.addRow("Product", self.product)
         form.addRow("รูปแบบ", self.format_lbl)
         form.addRow("ตัวถัดไป", self.next_lbl)
-        form.addRow("Lot", self.lot)
+        form.addRow("Workorder", self.lot)
         form.addRow("จำนวน", self.count)
         form.addRow("จะได้", self.range_lbl)
 
@@ -86,7 +89,7 @@ class GenerateTab(QWidget):
         lay.addWidget(right_w)
 
         self.product.currentIndexChanged.connect(self._product_changed)
-        self.lot.textChanged.connect(self.update_preview)
+        self.lot.currentTextChanged.connect(self.update_preview)
         self.count.valueChanged.connect(self.update_preview)
         self.gen_btn.clicked.connect(self.do_generate)
         self.launch_btn.clicked.connect(self.do_launch)
@@ -102,6 +105,12 @@ class GenerateTab(QWidget):
         idx = self.product.findData(cur)
         self.product.setCurrentIndex(idx if idx >= 0 else 0)
         self.product.blockSignals(False)
+        text = self.lot.currentText()
+        self.lot.blockSignals(True)
+        self.lot.clear()
+        self.lot.addItems(app.workorders)
+        self.lot.setCurrentText(text if text else "")
+        self.lot.blockSignals(False)
         self._product_changed()
 
     def current(self) -> hl.Product:
@@ -142,20 +151,23 @@ class GenerateTab(QWidget):
         except ValueError as e:
             self.range_lbl.setText(f"<span style='color:#d62828'>{e}</span>")
             ok = False
-        lot_ok = bool(self.lot.text().strip())
+        lot_ok = bool(self.lot.currentText().strip())
         self.gen_btn.setEnabled(ok and lot_ok)
-        self.gen_btn.setToolTip("" if lot_ok else "กรอก Lot ก่อน")
+        self.gen_btn.setToolTip("" if lot_ok else "เลือก Workorder ก่อน")
 
     def do_generate(self) -> None:
         app, prod = self.win.app, self.current()
-        lot, n = self.lot.text().strip(), self.count.value()
+        lot, n = self.lot.currentText().strip(), self.count.value()
         try:
             s = hl.preview(app, prod.id, n, store=self.win.store)
         except ValueError as e:
             return error(self, str(e))
         txt = app.abspath(prod.serial_txt)
-        msg = (f"Product: {prod.name}\nLot: {lot}\nจำนวน: {n}\n{s[0]} – {s[-1]}\n\n"
+        msg = (f"Product: {prod.name}\nWorkorder: {lot}\nจำนวน: {n}\n{s[0]} – {s[-1]}\n\n"
                f"เขียนทับไฟล์:\n{txt}\n(ไฟล์เดิมจะถูกสำรองไว้ใน archive)")
+        if lot not in app.workorders:
+            msg += (f"\n\n⚠ Workorder '{lot}' ไม่อยู่ในรายการ Settings\n"
+                    "หน้า Verify จะเลือก Workorder นี้ไม่ได้ ให้ Engineer เพิ่มในรายการด้วย")
         if QMessageBox.question(self, "ยืนยัน Generate", msg) != QMessageBox.Yes:
             return
         try:
@@ -163,7 +175,7 @@ class GenerateTab(QWidget):
         except (ValueError, OSError) as e:
             return error(self, f"Generate ไม่สำเร็จ ไม่มีอะไรถูกบันทึก\n\n{e}")
         self.result.setPlainText(
-            f"{b.created_at}  [{prod.name}] lot {b.lot}\n"
+            f"{b.created_at}  [{prod.name}] workorder {b.lot}\n"
             f"{len(b.serials)} ตัว: {b.serials[0]} – {b.serials[-1]}\n{b.txt_path}")
         self.update_preview()
         self.generated.emit()
@@ -177,20 +189,20 @@ class GenerateTab(QWidget):
 
 
 class HistoryTab(QWidget):
-    COLS = ["เวลา", "Product", "Lot", "จำนวน", "ตั้งแต่", "ถึง", "ไฟล์"]
+    COLS = ["เวลา", "Product", "Workorder", "จำนวน", "ตั้งแต่", "ถึง", "ไฟล์"]
 
     def __init__(self, win: "MainWindow"):
         super().__init__()
         self.win = win
         self.product = QComboBox()
         self.lot = QLineEdit()
-        self.lot.setPlaceholderText("ค้นหา lot")
+        self.lot.setPlaceholderText("ค้นหา workorder")
         refresh = QPushButton("Refresh")
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Product"))
         top.addWidget(self.product)
-        top.addWidget(QLabel("Lot"))
+        top.addWidget(QLabel("Workorder"))
         top.addWidget(self.lot, 1)
         top.addWidget(refresh)
 
@@ -266,6 +278,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("han-laser  ·  Serial generator for Han's Laser Marking")
         self.resize(1100, 680)
 
+        self.verify_tab = VerifyTab(self)
         self.gen_tab = GenerateTab(self)
         self.hist_tab = HistoryTab(self)
         self.settings_tab = SettingsTab(self)
@@ -274,6 +287,7 @@ class MainWindow(QMainWindow):
         self.settings_stack.addWidget(self.lock_page)
         self.settings_stack.addWidget(self.settings_tab)
         tabs = QTabWidget()
+        tabs.addTab(self.verify_tab, "Verify")
         tabs.addTab(self.gen_tab, "Generate")
         tabs.addTab(self.hist_tab, "History")
         tabs.addTab(self.settings_stack, "Settings (ล็อก)")
@@ -282,6 +296,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(tabs)
 
         self.gen_tab.generated.connect(self.hist_tab.refresh)
+        self.gen_tab.generated.connect(self.verify_tab.refresh)
         self.settings_tab.saved.connect(self.config_saved)
         self.settings_tab.change_password_requested.connect(self.change_password)
         self.lock_page.unlock_requested.connect(self.unlock)
@@ -296,6 +311,7 @@ class MainWindow(QMainWindow):
         self.lock()
 
     def reload_all(self) -> None:
+        self.verify_tab.reload()
         self.gen_tab.reload()
         self.hist_tab.reload()
         self.settings_tab.reload()
@@ -309,7 +325,7 @@ class MainWindow(QMainWindow):
         self.settings_tab.reload()                       # ทิ้งการแก้ที่ยังไม่บันทึก
         self.settings_stack.setCurrentIndex(0)
         self.lock_page.set_has_password(bool(self.app.engineer_password))
-        self.tabs.setTabText(2, "Settings (ล็อก)")
+        self.tabs.setTabText(self.tabs.indexOf(self.settings_stack), "Settings (ล็อก)")
         self.mode_lbl.setText("Operator")
         self.lock_btn.hide()
 
@@ -324,7 +340,7 @@ class MainWindow(QMainWindow):
             return False
         self.settings_tab.reload()
         self.settings_stack.setCurrentIndex(1)
-        self.tabs.setTabText(2, "Settings (Engineer)")
+        self.tabs.setTabText(self.tabs.indexOf(self.settings_stack), "Settings (Engineer)")
         self.mode_lbl.setText("<b style='color:#b45309'>Engineer mode</b>")
         self.lock_btn.show()
         return True
@@ -351,6 +367,9 @@ class MainWindow(QMainWindow):
         # เลขอาจเปลี่ยนตามเวลา (ข้ามวัน/เดือน) อัปเดตทุกครั้งที่กลับมาหน้า Generate
         if self.tabs.widget(idx) is self.gen_tab:
             self.gen_tab.update_preview()
+        elif self.tabs.widget(idx) is self.verify_tab:
+            self.verify_tab.refresh()
+            self.verify_tab.focus_scan()
 
     def config_saved(self, new_app: hl.AppConfig) -> None:
         old_db = self.app.abspath(self.app.db_file)
@@ -358,6 +377,7 @@ class MainWindow(QMainWindow):
         if self.app.abspath(self.app.db_file) != old_db:
             self.store.close()
             self.store = Store(self.app.abspath(self.app.db_file))
+        self.verify_tab.reload()
         self.gen_tab.reload()
         self.hist_tab.reload()
         self.statusBar().showMessage(f"บันทึก config แล้ว {datetime.now():%H:%M:%S}", 5000)

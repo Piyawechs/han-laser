@@ -7,11 +7,22 @@ from pathlib import Path
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 import han_laser as hl
 from ui.common import ImageLabel, error, rel_or_abs
+
+
+def lines_of(edit: QPlainTextEdit) -> list[str]:
+    """แยกบรรทัด ตัดช่องว่าง ตัดบรรทัดว่างและรายการซ้ำ (คงลำดับเดิม)"""
+    out = []
+    for line in edit.toPlainText().splitlines():
+        s = line.strip()
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 class PathEdit(QWidget):
@@ -117,6 +128,22 @@ class SettingsTab(QWidget):
         gbox = QGroupBox("ทั่วไป")
         gbox.setLayout(gform)
 
+        # ---- รายการ dropdown ของหน้า Verify (บรรทัดละ 1 รายการ)
+        self.operators = QPlainTextEdit()
+        self.shifts = QPlainTextEdit()
+        self.workorders = QPlainTextEdit()
+        vrow = QHBoxLayout()
+        for title, w in (("EN (พนักงาน)", self.operators), ("Shift", self.shifts),
+                         ("Workorder (= Lot ตอน Generate)", self.workorders)):
+            w.setMinimumHeight(160)
+            w.setPlaceholderText("บรรทัดละ 1 รายการ")
+            col = QVBoxLayout()
+            col.addWidget(QLabel(title))
+            col.addWidget(w)
+            vrow.addLayout(col)
+        vbox = QGroupBox("รายการ dropdown หน้า Verify")
+        vbox.setLayout(vrow)
+
         save = QPushButton("บันทึก")
         save.setMinimumHeight(36)
         save.setStyleSheet("QPushButton { font-weight: bold; }")
@@ -129,15 +156,23 @@ class SettingsTab(QWidget):
         brow.addWidget(revert)
         brow.addWidget(save)
 
-        rbox = QVBoxLayout()
-        rbox.addWidget(pbox)
-        rbox.addWidget(gbox)
-        rbox.addLayout(brow)
-        rbox.addStretch(1)
+        # แท็บย่อย: Products | Verify และทั่วไป
+        page1 = QWidget()
+        p1 = QHBoxLayout(page1)
+        p1.addWidget(left)
+        p1.addWidget(pbox, 1)
+        page2 = QWidget()
+        p2 = QVBoxLayout(page2)
+        p2.addWidget(vbox)
+        p2.addWidget(gbox)
+        p2.addStretch(1)
+        inner = QTabWidget()
+        inner.addTab(page1, "Products")
+        inner.addTab(page2, "Verify และทั่วไป")
 
-        lay = QHBoxLayout(self)
-        lay.addWidget(left)
-        lay.addLayout(rbox, 1)
+        lay = QVBoxLayout(self)
+        lay.addWidget(inner, 1)
+        lay.addLayout(brow)
 
         self.list.currentItemChanged.connect(self._select)
         add.clicked.connect(self.add_product)
@@ -156,6 +191,9 @@ class SettingsTab(QWidget):
         self.work = copy.deepcopy(self.win.app)
         self.cur_id = None
         self.encoding.setCurrentText(self.work.txt_encoding)
+        self.operators.setPlainText("\n".join(self.work.operators))
+        self.shifts.setPlainText("\n".join(self.work.shifts))
+        self.workorders.setPlainText("\n".join(self.work.workorders))
         self._fill_list(self.work.last_product)
 
     def _fill_list(self, select: str | None = None) -> None:
@@ -249,6 +287,9 @@ class SettingsTab(QWidget):
     def save(self) -> None:
         self._commit_form()
         self.work.txt_encoding = self.encoding.currentText().strip()
+        self.work.operators = lines_of(self.operators)
+        self.work.shifts = lines_of(self.shifts)
+        self.work.workorders = lines_of(self.workorders)
         if self.work.last_product not in self.work.products:
             self.work.last_product = next(iter(self.work.products))
         try:

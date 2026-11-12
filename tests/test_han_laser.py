@@ -177,6 +177,10 @@ class ConfigTest(Base):
             self.write_cfg({"products": {"a": product("a", "A", serial_txt="s.txt"),
                                          "b": product("b", "B", serial_txt="s.txt")}})
 
+    def test_lists_must_be_strings(self):
+        with self.assertRaises(ValueError):
+            self.write_cfg({"workorders": ["ok", ""], "products": {"a": product("a", "A")}})
+
     def test_bad_encoding(self):
         with self.assertRaises(ValueError):
             self.write_cfg({"txt_encoding": "nope", "products": {"a": product("a", "A")}})
@@ -213,6 +217,62 @@ class PasswordTest(Base):
         self.app.save()
         again = hl.AppConfig.load(self.dir / "config.json")
         self.assertTrue(hl.verify_password("abcd", again.engineer_password))
+
+
+class VerifyTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.store = hl.open_store(self.app)
+        hl.generate(self.app, "ceramic_box", 3, "WO1", now=self.day1, store=self.store)
+        hl.generate(self.app, "lid", 2, "WO2", now=self.day1, store=self.store)
+
+    def tearDown(self):
+        self.store.close()
+        super().tearDown()
+
+    def v(self, code, wo="WO1"):
+        return hl.verify(self.store, code, "EN01", "A", wo, now=self.day1)
+
+    def test_pass(self):
+        r = self.v("CB26110001")
+        self.assertTrue(r.ok)
+        self.assertEqual((r.serial, r.product, r.reason), ("CB26110001", "ceramic_box", ""))
+
+    def test_scanner_whitespace_and_case(self):
+        self.assertTrue(self.v("  cb26110002\r\n").ok)
+
+    def test_not_found(self):
+        r = self.v("CB26119999")
+        self.assertEqual((r.ok, r.reason), (False, "NOT_FOUND"))
+
+    def test_wrong_workorder(self):
+        r = self.v("LD26110001", wo="WO1")
+        self.assertEqual((r.ok, r.reason), (False, "WRONG_WORKORDER"))
+        self.assertIn("WO2", r.message)
+
+    def test_duplicate_after_pass_only(self):
+        self.v("CB26110003", wo="WO2")              # FAIL ไม่นับเป็นซ้ำ
+        self.assertTrue(self.v("CB26110003").ok)
+        r = self.v("CB26110003")
+        self.assertEqual((r.ok, r.reason), (False, "DUPLICATE"))
+        self.assertIn("EN01", r.message)
+
+    def test_everything_logged_and_stats(self):
+        self.v("CB26110001")
+        self.v("CB26110001")
+        self.v("XXX")
+        rows = self.store.list_verifications("WO1")
+        self.assertEqual([r["result"] for r in rows], ["FAIL", "FAIL", "PASS"])
+        self.assertEqual(rows[0]["raw_code"], "XXX")
+        self.assertEqual(self.store.workorder_stats("WO1"), {"generated": 3, "passed": 1, "failed": 2})
+
+    def test_empty_not_logged(self):
+        self.assertEqual(self.v("   ").reason, "EMPTY")
+        self.assertEqual(self.store.list_verifications(), [])
+
+    def test_requires_selection(self):
+        with self.assertRaises(ValueError):
+            hl.verify(self.store, "CB26110001", "", "A", "WO1")
 
 
 class StoreTest(unittest.TestCase):

@@ -96,6 +96,9 @@ class AppConfig:
     txt_newline: str = "\r\n"
     last_product: str = ""
     engineer_password: str = ""       # hash (pbkdf2) ว่าง = ยังไม่ได้ตั้ง
+    operators: list = field(default_factory=list)          # EN ให้เลือกในหน้า Verify
+    shifts: list = field(default_factory=lambda: ["A", "B", "C"])
+    workorders: list = field(default_factory=list)         # = Lot ตอน Generate
     path: Path | None = field(default=None, repr=False, compare=False)
 
     # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
@@ -118,6 +121,10 @@ class AppConfig:
             if pid != prod.id:
                 raise ValueError(f"product key '{pid}' ไม่ตรงกับ id '{prod.id}'")
             prod.validate()
+        for name in ("operators", "shifts", "workorders"):
+            v = getattr(self, name)
+            if not isinstance(v, list) or not all(isinstance(x, str) and x.strip() for x in v):
+                raise ValueError(f"{name} ต้องเป็นรายการข้อความ (ไม่ว่าง)")
         txts = [str(self.abspath(p.serial_txt)).lower() for p in self.products.values()]
         if len(set(txts)) != len(txts):
             raise ValueError("แต่ละ product ต้องใช้ไฟล์ serial_txt คนละไฟล์")
@@ -323,6 +330,52 @@ def is_running(image_name: str) -> bool:
     out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/NH"],
                          capture_output=True, text=True, creationflags=0x08000000).stdout  # CREATE_NO_WINDOW
     return image_name.lower() in out.lower()
+
+
+@dataclass
+class VerifyResult:
+    ok: bool
+    serial: str
+    reason: str          # '' | EMPTY | NOT_FOUND | WRONG_WORKORDER | DUPLICATE
+    message: str
+    product: str = ""
+    id: int | None = None
+
+
+def normalize_code(raw: str) -> str:
+    """ค่าที่สแกนได้ = serial ตรง ๆ ตัดช่องว่าง/ขึ้นบรรทัด และทำเป็นตัวพิมพ์ใหญ่"""
+    return "".join(raw.split()).upper()
+
+
+def verify(store: Store, raw_code: str, en: str, shift: str, workorder: str,
+           now: datetime | None = None) -> VerifyResult:
+    """ตรวจ serial หลังมาร์ก: ต้องเคย generate, อยู่ใน workorder ที่เลือก และยังไม่เคย PASS
+    บันทึกทุกครั้ง (ทั้ง PASS และ FAIL) ยกเว้นค่าว่าง"""
+    if not (en and shift and workorder):
+        raise ValueError("เลือก EN, Shift และ Workorder ก่อนสแกน")
+    serial = normalize_code(raw_code)
+    if not serial:
+        return VerifyResult(False, "", "EMPTY", "ไม่มีข้อมูลจากการสแกน")
+    now = now or datetime.now()
+    stamp = now.isoformat(timespec="seconds")
+    with store.transaction():
+        info = store.serial_info(serial)
+        product = info["product"] if info else ""
+        if info is None:
+            reason, msg = "NOT_FOUND", "ไม่พบ serial นี้ในระบบ (ไม่เคย generate)"
+        elif info["lot"] != workorder:
+            reason, msg = "WRONG_WORKORDER", f"serial นี้อยู่ใน Workorder {info['lot'] or '-'} ไม่ใช่ {workorder}"
+        else:
+            prev = store.first_pass(serial)
+            if prev is not None:
+                reason = "DUPLICATE"
+                msg = f"serial นี้ verify ผ่านไปแล้วเมื่อ {prev['scanned_at'].replace('T', ' ')} (EN {prev['en']})"
+            else:
+                reason, msg = "", "ถูกต้อง"
+        ok = reason == ""
+        vid = store.add_verification(stamp, raw_code, serial, product, en, shift, workorder,
+                                     "PASS" if ok else "FAIL", reason)
+    return VerifyResult(ok, serial, reason, msg, product, vid)
 
 
 def launch(app: AppConfig, product_id: str | None = None) -> str:
