@@ -11,9 +11,11 @@
 ```
 git clone https://github.com/Piyawechs/han-laser.git
 cd han-laser
-pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
 ```
 ต้องมี Python 3.9 ขึ้นไป
+`start_ui.bat` จะใช้ Python ใน `.venv` ของโปรเจกต์ก่อน ถ้าไม่มี `.venv` จึงใช้ `pythonw` ของเครื่อง
 
 ## เปิด UI
 ดับเบิลคลิก `start_ui.bat` หรือ `han_laser_ui.pyw`

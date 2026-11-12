@@ -1,4 +1,7 @@
 @echo off
-rem Start han-laser UI (first time: pip install -r requirements.txt)
+rem Start han-laser UI. Uses .venv in this folder if present, otherwise global pythonw.
+rem First time: python -m venv .venv  then  .venv\Scripts\pip install -r requirements.txt
 cd /d "%~dp0"
-start "" pythonw han_laser_ui.pyw %*
+set "PYW=pythonw"
+if exist ".venv\Scripts\pythonw.exe" set "PYW=.venv\Scripts\pythonw.exe"
+start "" "%PYW%" han_laser_ui.pyw %*
