@@ -198,6 +198,23 @@ class ConfigTest(Base):
         self.assertEqual(hl.preview(app, "ceramic_box", 1, now=self.day1), ["CB26110001"])
 
 
+class PasswordTest(Base):
+    def test_hash_and_verify(self):
+        h = hl.hash_password("1234")
+        self.assertNotIn("1234", h)
+        self.assertTrue(hl.verify_password("1234", h))
+        self.assertFalse(hl.verify_password("12345", h))
+        self.assertFalse(hl.verify_password("1234", ""))
+        self.assertFalse(hl.verify_password("1234", "garbage"))
+        self.assertNotEqual(h, hl.hash_password("1234"))  # salt ต่างกัน
+
+    def test_saved_in_config(self):
+        self.app.engineer_password = hl.hash_password("abcd")
+        self.app.save()
+        again = hl.AppConfig.load(self.dir / "config.json")
+        self.assertTrue(hl.verify_password("abcd", again.engineer_password))
+
+
 class StoreTest(unittest.TestCase):
     def test_primary_key_blocks_duplicates(self):
         with tempfile.TemporaryDirectory() as d, Store(Path(d) / "x.db") as s:

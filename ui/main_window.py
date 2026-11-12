@@ -7,13 +7,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import han_laser as hl
 from store import Store
 from ui.common import ImageLabel, error
+from ui.engineer import LockPage, SetPasswordDialog, UnlockDialog
 from ui.settings_tab import SettingsTab
 
 
@@ -268,23 +269,83 @@ class MainWindow(QMainWindow):
         self.gen_tab = GenerateTab(self)
         self.hist_tab = HistoryTab(self)
         self.settings_tab = SettingsTab(self)
+        self.lock_page = LockPage()
+        self.settings_stack = QStackedWidget()         # 0 = ล็อก, 1 = Settings
+        self.settings_stack.addWidget(self.lock_page)
+        self.settings_stack.addWidget(self.settings_tab)
         tabs = QTabWidget()
         tabs.addTab(self.gen_tab, "Generate")
         tabs.addTab(self.hist_tab, "History")
-        tabs.addTab(self.settings_tab, "Settings")
+        tabs.addTab(self.settings_stack, "Settings (ล็อก)")
         tabs.currentChanged.connect(self._tab_changed)
         self.tabs = tabs
         self.setCentralWidget(tabs)
 
         self.gen_tab.generated.connect(self.hist_tab.refresh)
         self.settings_tab.saved.connect(self.config_saved)
+        self.settings_tab.change_password_requested.connect(self.change_password)
+        self.lock_page.unlock_requested.connect(self.unlock)
+
+        self.mode_lbl = QLabel()
+        self.lock_btn = QPushButton("ออกจาก Engineer mode")
+        self.lock_btn.clicked.connect(self.lock)
+        self.statusBar().addPermanentWidget(self.mode_lbl)
+        self.statusBar().addPermanentWidget(self.lock_btn)
         self.statusBar().showMessage(f"config: {self.config_path}   db: {self.store.path}")
         self.reload_all()
+        self.lock()
 
     def reload_all(self) -> None:
         self.gen_tab.reload()
         self.hist_tab.reload()
         self.settings_tab.reload()
+
+    # ------------------------------------------------------------ engineer mode
+    @property
+    def engineer(self) -> bool:
+        return self.settings_stack.currentIndex() == 1
+
+    def lock(self) -> None:
+        self.settings_tab.reload()                       # ทิ้งการแก้ที่ยังไม่บันทึก
+        self.settings_stack.setCurrentIndex(0)
+        self.lock_page.set_has_password(bool(self.app.engineer_password))
+        self.tabs.setTabText(2, "Settings (ล็อก)")
+        self.mode_lbl.setText("Operator")
+        self.lock_btn.hide()
+
+    def unlock(self) -> bool:
+        if not self.app.engineer_password:
+            dlg = SetPasswordDialog(self, "")
+            if not dlg.exec():
+                return False
+            if not self._store_password(dlg.new_hash):
+                return False
+        elif not UnlockDialog(self, self.app.engineer_password).exec():
+            return False
+        self.settings_tab.reload()
+        self.settings_stack.setCurrentIndex(1)
+        self.tabs.setTabText(2, "Settings (Engineer)")
+        self.mode_lbl.setText("<b style='color:#b45309'>Engineer mode</b>")
+        self.lock_btn.show()
+        return True
+
+    def change_password(self) -> None:
+        dlg = SetPasswordDialog(self, self.app.engineer_password)
+        if dlg.exec() and self._store_password(dlg.new_hash):
+            QMessageBox.information(self, "Engineer mode", "เปลี่ยนรหัสผ่านแล้ว")
+
+    def _store_password(self, new_hash: str) -> bool:
+        old = self.app.engineer_password
+        self.app.engineer_password = new_hash
+        try:
+            self.app.save()
+        except (ValueError, OSError) as e:
+            self.app.engineer_password = old
+            error(self, f"บันทึกรหัสผ่านไม่ได้\n\n{e}")
+            return False
+        if self.settings_tab.work is not None:
+            self.settings_tab.work.engineer_password = new_hash
+        return True
 
     def _tab_changed(self, idx: int) -> None:
         # เลขอาจเปลี่ยนตามเวลา (ข้ามวัน/เดือน) อัปเดตทุกครั้งที่กลับมาหน้า Generate

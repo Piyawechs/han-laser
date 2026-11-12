@@ -82,6 +82,46 @@ class UISmokeTest(unittest.TestCase):
         g.product.setCurrentIndex(g.product.findData("lid"))
         self.assertTrue(g.next_lbl.text().startswith("LID"))
 
+    def test_settings_locked_by_default_and_unlock(self):
+        import han_laser as hl
+        from ui import main_window as mw
+        w = self.win
+        self.assertFalse(w.engineer)
+        self.assertEqual(w.settings_stack.currentIndex(), 0)
+        # ครั้งแรก: ยังไม่มีรหัส -> ตั้งรหัสใหม่
+        def fake_set_exec(dlg):
+            dlg.new_hash = hl.hash_password("9999")
+            return True
+        with mock.patch.object(mw.SetPasswordDialog, "exec", fake_set_exec):
+            self.assertTrue(w.unlock())
+        self.assertTrue(w.engineer)
+        saved = json.loads((self.dir / "config.json").read_text())["engineer_password"]
+        self.assertTrue(hl.verify_password("9999", saved))
+        w.lock()
+        self.assertFalse(w.engineer)
+        # ครั้งต่อไป: ใส่รหัสผิด -> เข้าไม่ได้
+        with mock.patch.object(mw.UnlockDialog, "exec", return_value=False):
+            self.assertFalse(w.unlock())
+        self.assertFalse(w.engineer)
+        # settings save ต้องไม่ลบรหัส
+        with mock.patch.object(mw.UnlockDialog, "exec", return_value=True):
+            self.assertTrue(w.unlock())
+        w.settings_tab.save()
+        saved2 = json.loads((self.dir / "config.json").read_text())["engineer_password"]
+        self.assertEqual(saved, saved2)
+
+    def test_unlock_dialog_checks_password(self):
+        import han_laser as hl
+        from ui.engineer import UnlockDialog
+        dlg = UnlockDialog(self.win, hl.hash_password("pass"))
+        dlg.pw.setText("wrong")
+        dlg._ok()
+        self.assertEqual(dlg.result(), 0)
+        self.assertIn("ไม่ถูกต้อง", dlg.msg.text())
+        dlg.pw.setText("pass")
+        dlg._ok()
+        self.assertEqual(dlg.result(), 1)
+
     def test_screenshot(self):
         self.win.resize(1100, 680)
         self.win.show()
@@ -90,6 +130,10 @@ class UISmokeTest(unittest.TestCase):
         if out:
             self.qapp.processEvents()
             self.win.grab().save(str(Path(out) / "generate.png"))
+            self.win.tabs.setCurrentIndex(2)
+            self.qapp.processEvents()
+            self.win.grab().save(str(Path(out) / "locked.png"))
+            self.win.settings_stack.setCurrentIndex(1)
             for i, name in ((1, "history"), (2, "settings")):
                 self.win.tabs.setCurrentIndex(i)
                 self.qapp.processEvents()

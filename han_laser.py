@@ -12,6 +12,8 @@ core นี้ใช้ได้กับ Python 3.9+ ไม่ต้องต�
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -93,6 +95,7 @@ class AppConfig:
     txt_encoding: str = "utf-8"
     txt_newline: str = "\r\n"
     last_product: str = ""
+    engineer_password: str = ""       # hash (pbkdf2) ว่าง = ยังไม่ได้ตั้ง
     path: Path | None = field(default=None, repr=False, compare=False)
 
     # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
@@ -155,6 +158,29 @@ class AppConfig:
             raise ValueError("ไม่ได้ระบุ path ของ config")
         atomic_write_text(target, json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n", "utf-8")
         self.path = target
+
+
+# ---------------------------------------------------------------- engineer password
+
+PBKDF2_ITER = 200_000
+
+
+def hash_password(password: str) -> str:
+    """เก็บเป็น hash ไม่เก็บรหัสจริง: pbkdf2_sha256$iter$salt$hash"""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITER)
+    return f"pbkdf2_sha256${PBKDF2_ITER}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, it, salt, digest = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), int(it))
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(dk.hex(), digest)
 
 
 # ---------------------------------------------------------------- helpers

@@ -45,6 +45,7 @@ class PathEdit(QWidget):
 
 class SettingsTab(QWidget):
     saved = Signal(object)  # AppConfig ใหม่
+    change_password_requested = Signal()
 
     def __init__(self, win):
         super().__init__()
@@ -120,7 +121,10 @@ class SettingsTab(QWidget):
         save.setMinimumHeight(36)
         save.setStyleSheet("QPushButton { font-weight: bold; }")
         revert = QPushButton("ยกเลิกการแก้")
+        chpw = QPushButton("เปลี่ยนรหัสผ่าน Engineer")
+        chpw.clicked.connect(self.change_password_requested)
         brow = QHBoxLayout()
+        brow.addWidget(chpw)
         brow.addStretch(1)
         brow.addWidget(revert)
         brow.addWidget(save)

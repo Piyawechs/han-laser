@@ -25,7 +25,16 @@ python -m venv .venv
 |---|---|
 | **Generate** | เลือก product → ดูรูปตำแหน่งมาร์กและ serial ตัวถัดไป → กรอก Lot และจำนวน → **Generate serial** (มีหน้ายืนยันก่อน) → **เปิด template** |
 | **History** | ดูชุดที่สร้างไปแล้ว กรองตาม product หรือ lot ได้ ดับเบิลคลิกแถวเพื่อดูหรือ copy serial ทั้งชุด |
-| **Settings** | แก้ชื่อ, prefix, รูปแบบ, path ของ template / .txt / รูป และเพิ่มหรือลบ product แล้วกด **บันทึก** |
+| **Settings** (Engineer mode) | แก้ชื่อ, prefix, รูปแบบ, path ของ template / .txt / รูป และเพิ่มหรือลบ product แล้วกด **บันทึก** |
+
+### Engineer mode
+- หน้า Settings ถูกล็อกไว้ ต้องกด **เข้าสู่ Engineer mode** แล้วใส่รหัสผ่าน
+- ครั้งแรกที่ยังไม่มีรหัส โปรแกรมจะให้ตั้งรหัสใหม่ (อย่างน้อย 4 ตัว)
+- เปลี่ยนรหัสได้ที่ปุ่ม **เปลี่ยนรหัสผ่าน Engineer** ในหน้า Settings
+- กด **ออกจาก Engineer mode** ที่มุมขวาล่าง หรือปิดโปรแกรม จะกลับไปล็อก (การแก้ที่ยังไม่บันทึกจะหาย)
+- รหัสเก็บใน `config.json` เป็น hash (`engineer_password`) ไม่เก็บรหัสจริง
+- **ลืมรหัส:** ปิดโปรแกรม แล้วลบค่าใน `"engineer_password"` ของ `config.json` ให้เป็น `""` จากนั้นเปิดใหม่และตั้งรหัสใหม่
+- ระบบนี้กันไม่ให้ operator แก้การตั้งค่าโดยไม่ตั้งใจ ไม่ได้กันคนที่แก้ไฟล์ `config.json` ได้โดยตรง
 
 ## ตั้งค่า template ใน Han's (ทำครั้งเดียวต่อ product)
 1. ดับเบิลคลิก object barcode หรือ text เพื่อเปิด Barcode setup → เลือก **Serial** → กด **Set...**
