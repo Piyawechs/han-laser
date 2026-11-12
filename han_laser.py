@@ -277,22 +277,49 @@ def generate(app: AppConfig, product_id: str | None, count: int, lot: str = "",
             store.close()
 
 
+def associated_exe(ext: str) -> str | None:
+    """โปรแกรมที่ Windows ผูกไว้กับนามสกุลไฟล์ (เช่น .hs -> HLM.exe) ไม่พบหรือไม่ใช่ Windows -> None"""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    ASSOCSTR_EXECUTABLE = 2
+    size = wintypes.DWORD(1024)
+    buf = ctypes.create_unicode_buffer(size.value)
+    hr = ctypes.windll.shlwapi.AssocQueryStringW(0, ASSOCSTR_EXECUTABLE, ext, "open", buf, ctypes.byref(size))
+    return buf.value if hr == 0 and buf.value else None
+
+
+def is_running(image_name: str) -> bool:
+    """มีโปรเซสชื่อนี้ (เช่น HLM.exe) รันอยู่ไหม (Windows เท่านั้น)"""
+    if sys.platform != "win32":
+        return False
+    out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/NH"],
+                         capture_output=True, text=True, creationflags=0x08000000).stdout  # CREATE_NO_WINDOW
+    return image_name.lower() in out.lower()
+
+
 def launch(app: AppConfig, product_id: str | None = None) -> str:
-    """เปิด template ของ product คืนค่าข้อความบอกว่าเปิดด้วยอะไร"""
+    """เปิด template ของ product คืนค่าข้อความบอกว่าเปิดด้วยอะไร
+
+    เปิด HLM.exe ตรง ๆ โดยให้ working directory เป็นโฟลเดอร์ของ HLM.exe
+    (ถ้าเปิดจากโฟลเดอร์อื่น HLM.exe crash ตอนโหลด template)
+    """
     prod = app.product(product_id)
-    template = app.abspath(prod.template)
+    template = app.abspath(prod.template).resolve()
     if not template.exists():
         raise FileNotFoundError(f"ไม่พบ template: {template}")
-    if not prod.marking_exe:
-        # .hs ผูกกับโปรแกรม Han's ไว้แล้ว เหมือนดับเบิลคลิกไฟล์
-        if not hasattr(os, "startfile"):
-            raise OSError("เปิดแบบไม่ระบุ marking_exe ได้เฉพาะบน Windows")
-        os.startfile(str(template))
-        return "โปรแกรมที่ผูกกับ .hs"
-    exe = Path(prod.marking_exe)
+    exe_s = prod.marking_exe or associated_exe(template.suffix)
+    if not exe_s:
+        raise OSError(f"ไม่รู้ว่าจะเปิด {template.suffix} ด้วยโปรแกรมอะไร "
+                      f"ใส่ path ของ HLM.exe ในช่อง 'โปรแกรมมาร์ก' หน้า Settings")
+    exe = Path(exe_s)
     if not exe.exists():
         raise FileNotFoundError(f"ไม่พบโปรแกรมมาร์ก: {exe}")
-    txt = app.abspath(prod.serial_txt)
+    if is_running(exe.name):
+        raise OSError(f"{exe.name} เปิดอยู่แล้ว\n"
+                      f"ให้เปิด template จากเมนู File > Open ในโปรแกรมที่เปิดอยู่ หรือปิดโปรแกรมก่อนแล้วกดใหม่")
+    txt = app.abspath(prod.serial_txt).resolve()
     args = [a.format(template=template, serial_txt=txt) for a in prod.launch_args]
     subprocess.Popen([str(exe), *args], cwd=str(exe.parent))
     return str(exe)

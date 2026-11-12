@@ -128,6 +128,37 @@ class GenerateTest(Base):
             self.assertEqual(len(s.list_batches(product="ceramic_box")), 0)
 
 
+class LaunchTest(Base):
+    def setUp(self):
+        super().setUp()
+        (self.dir / "ceramic_box.hs").write_text("x")
+        self.exe = self.dir / "HANS" / "HLM.exe"
+        self.exe.parent.mkdir()
+        self.exe.write_text("x")
+
+    def test_uses_associated_exe_with_exe_folder_as_cwd(self):
+        with mock.patch.object(hl, "associated_exe", return_value=str(self.exe)), \
+             mock.patch.object(hl, "is_running", return_value=False), \
+             mock.patch.object(hl.subprocess, "Popen") as popen:
+            hl.launch(self.app, "ceramic_box")
+        args, kw = popen.call_args
+        self.assertEqual(args[0], [str(self.exe), str((self.dir / "ceramic_box.hs").resolve())])
+        self.assertEqual(kw["cwd"], str(self.exe.parent))
+
+    def test_refuses_when_already_running(self):
+        self.app.products["ceramic_box"].marking_exe = str(self.exe)
+        with mock.patch.object(hl, "is_running", return_value=True), \
+             mock.patch.object(hl.subprocess, "Popen") as popen:
+            with self.assertRaises(OSError):
+                hl.launch(self.app, "ceramic_box")
+        popen.assert_not_called()
+
+    def test_no_exe_found(self):
+        with mock.patch.object(hl, "associated_exe", return_value=None):
+            with self.assertRaises(OSError):
+                hl.launch(self.app, "ceramic_box")
+
+
 class ConfigTest(Base):
     def test_unknown_key(self):
         with self.assertRaises(ValueError):

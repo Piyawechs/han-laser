@@ -6,9 +6,10 @@ __pycache__/
 *.pyc
 *.png
 *.env
+*.dmp
 dist/
 .venv/
-
+template/
 
 # ภาพหน้าจอไม่เก็บ แต่รูปตำแหน่งมาร์กของ product ต้องเก็บ
 !images/*.png
