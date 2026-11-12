@@ -99,6 +99,7 @@ class AppConfig:
     operators: list = field(default_factory=list)          # EN ให้เลือกในหน้า Verify
     shifts: list = field(default_factory=lambda: ["A", "B", "C"])
     workorders: list = field(default_factory=list)         # = Lot ตอน Generate
+    iqr_codes: list = field(default_factory=list)          # iQR ให้เลือกในหน้า Verify (บันทึกคู่กับ serial)
     path: Path | None = field(default=None, repr=False, compare=False)
 
     # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
@@ -121,7 +122,7 @@ class AppConfig:
             if pid != prod.id:
                 raise ValueError(f"product key '{pid}' ไม่ตรงกับ id '{prod.id}'")
             prod.validate()
-        for name in ("operators", "shifts", "workorders"):
+        for name in ("operators", "shifts", "workorders", "iqr_codes"):
             v = getattr(self, name)
             if not isinstance(v, list) or not all(isinstance(x, str) and x.strip() for x in v):
                 raise ValueError(f"{name} ต้องเป็นรายการข้อความ (ไม่ว่าง)")
@@ -348,7 +349,7 @@ def normalize_code(raw: str) -> str:
 
 
 def verify(store: Store, raw_code: str, en: str, shift: str, workorder: str,
-           now: datetime | None = None) -> VerifyResult:
+           now: datetime | None = None, iqr: str = "") -> VerifyResult:
     """ตรวจ serial หลังมาร์ก: ต้องเคย generate, อยู่ใน workorder ที่เลือก และยังไม่เคย PASS
     บันทึกทุกครั้ง (ทั้ง PASS และ FAIL) ยกเว้นค่าว่าง"""
     if not (en and shift and workorder):
@@ -374,7 +375,7 @@ def verify(store: Store, raw_code: str, en: str, shift: str, workorder: str,
                 reason, msg = "", "ถูกต้อง"
         ok = reason == ""
         vid = store.add_verification(stamp, raw_code, serial, product, en, shift, workorder,
-                                     "PASS" if ok else "FAIL", reason)
+                                     "PASS" if ok else "FAIL", reason, iqr)
     return VerifyResult(ok, serial, reason, msg, product, vid)
 
 

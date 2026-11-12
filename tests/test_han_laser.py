@@ -231,7 +231,7 @@ class VerifyTest(Base):
         super().tearDown()
 
     def v(self, code, wo="WO1"):
-        return hl.verify(self.store, code, "EN01", "A", wo, now=self.day1)
+        return hl.verify(self.store, code, "EN01", "A", wo, now=self.day1, iqr="IQR9")
 
     def test_pass(self):
         r = self.v("CB26110001")
@@ -264,6 +264,7 @@ class VerifyTest(Base):
         rows = self.store.list_verifications("WO1")
         self.assertEqual([r["result"] for r in rows], ["FAIL", "FAIL", "PASS"])
         self.assertEqual(rows[0]["raw_code"], "XXX")
+        self.assertEqual(rows[2]["iqr"], "IQR9")
         self.assertEqual(self.store.workorder_stats("WO1"), {"generated": 3, "passed": 1, "failed": 2})
 
     def test_empty_not_logged(self):
@@ -276,6 +277,26 @@ class VerifyTest(Base):
 
 
 class StoreTest(unittest.TestCase):
+    def test_migrates_old_verifications_table(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "old.db"
+            c = sqlite3.connect(db)
+            c.execute("CREATE TABLE verifications (id INTEGER PRIMARY KEY AUTOINCREMENT, scanned_at TEXT NOT NULL,"
+                      " raw_code TEXT NOT NULL, serial TEXT NOT NULL, product TEXT NOT NULL DEFAULT '',"
+                      " en TEXT NOT NULL, shift TEXT NOT NULL, workorder TEXT NOT NULL, result TEXT NOT NULL,"
+                      " reason TEXT NOT NULL DEFAULT '')")
+            c.execute("INSERT INTO verifications (scanned_at, raw_code, serial, en, shift, workorder, result)"
+                      " VALUES ('t', 'A', 'A', 'e', 's', 'w', 'PASS')")
+            c.commit()
+            c.close()
+            with Store(db) as s:
+                rows = s.list_verifications()
+                self.assertEqual((len(rows), rows[0]["iqr"]), (1, ""))
+                with s.transaction():
+                    s.add_verification("t", "B", "B", "", "e", "s", "w", "PASS", "", iqr="Q1")
+                self.assertEqual(s.list_verifications()[0]["iqr"], "Q1")
+
     def test_primary_key_blocks_duplicates(self):
         with tempfile.TemporaryDirectory() as d, Store(Path(d) / "x.db") as s:
             with s.transaction():

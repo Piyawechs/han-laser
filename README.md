@@ -23,7 +23,7 @@ python -m venv .venv
 
 | หน้า | ใช้ทำอะไร |
 |---|---|
-| **Verify** (หน้าแรก) | เลือก EN, Shift, Workorder → สแกน QR code ของชิ้นที่มาร์กแล้ว → ขึ้น **PASS** (เขียว) หรือ **FAIL** (แดง) และบันทึกทุกครั้ง |
+| **Verify** (หน้าแรก) | เลือก EN, Shift, Workorder, iQR code → สแกน QR code ของชิ้นที่มาร์กแล้ว → ขึ้น **PASS** (เขียว) หรือ **FAIL** (แดง) และบันทึกทุกครั้ง |
 | **Generate** | เลือก product → ดูรูปตำแหน่งมาร์กและ serial ตัวถัดไป → กรอก Lot และจำนวน → **Generate serial** (มีหน้ายืนยันก่อน) → **เปิด template** |
 | **History** | ดูชุดที่สร้างไปแล้ว กรองตาม product หรือ lot ได้ ดับเบิลคลิกแถวเพื่อดูหรือ copy serial ทั้งชุด |
 | **Settings** (Engineer mode) | แก้ชื่อ, prefix, รูปแบบ, path ของ template / .txt / รูป และเพิ่มหรือลบ product แล้วกด **บันทึก** |
@@ -35,8 +35,9 @@ python -m venv .venv
   - **ไม่พบในระบบ**: ไม่เคย generate
   - **ผิด Workorder**: serial อยู่ใน Workorder อื่น
   - **ซ้ำ**: เคย PASS ไปแล้ว ข้อความจะบอกเวลาและ EN ของครั้งแรก
-- ทุกการสแกนเก็บในตาราง `verifications` ของ SQLite บันทึกเวลา, ค่าที่สแกนได้, serial, product, EN, Shift, Workorder, ผล และสาเหตุ
-- รายการใน dropdown (EN, Shift, Workorder) Engineer ตั้งได้ที่หน้า Settings → แท็บ "Verify และทั่วไป" บรรทัดละ 1 รายการ
+- **iQR code** เป็นค่าที่เลือกจาก dropdown (ไม่ได้สแกน) และบันทึกคู่กับ serial ทุกครั้ง
+- ทุกการสแกนเก็บในตาราง `verifications` ของ SQLite บันทึกเวลา, ค่าที่สแกนได้, serial, product, EN, Shift, Workorder, iQR, ผล และสาเหตุ
+- รายการใน dropdown (EN, Shift, Workorder, iQR code) Engineer ตั้งได้ที่หน้า Settings → แท็บ "Verify และทั่วไป" บรรทัดละ 1 รายการ
 - **Workorder = Lot ตอน Generate** ช่อง Workorder ในหน้า Generate ใช้รายการชุดเดียวกัน
 
 ### Engineer mode

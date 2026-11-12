@@ -10,6 +10,7 @@
   "operators": ["EN001", "EN002"],
   "shifts": ["A", "B", "C"],
   "workorders": ["WO-TEST-001"],
+  "iqr_codes": ["IQR-TEST-01"],
 
   "products": {
     "ceramic_box": {

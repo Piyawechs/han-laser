@@ -130,6 +130,8 @@ class UISmokeTest(unittest.TestCase):
         v.en.setCurrentIndex(v.en.findData("EN001"))
         v.shift.setCurrentIndex(v.shift.findData("A"))
         v.workorder.setCurrentIndex(v.workorder.findData("WO-TEST-001"))
+        self.assertFalse(v.scan.isEnabled())              # ยังไม่เลือก iQR
+        v.iqr.setCurrentIndex(v.iqr.findData("IQR-TEST-01"))
         serial = hl.preview(self.win.app, "ceramic_box", 1, store=self.win.store)[0]
         first = serial[:-4] + str(int(serial[-4:]) - 3).zfill(4)
         for code in (first, first, "NOPE123"):
@@ -150,6 +152,7 @@ class UISmokeTest(unittest.TestCase):
         self.assertEqual((v.session_pass, v.session_fail), (2, 2))
         self.assertEqual(v.table.rowCount(), 4)
         self.assertEqual(v.table.item(1, 2).text(), "FAIL")
+        self.assertEqual(v.table.item(0, 4).text(), "IQR-TEST-01")
         self.assertEqual(v.scan.text(), "")              # เคลียร์รอสแกนต่อ
         self.assertIn("ผ่านแล้ว <b>2</b> / generate 3", v.stat_wo.text())
 

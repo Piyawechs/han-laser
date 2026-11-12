@@ -132,9 +132,10 @@ class SettingsTab(QWidget):
         self.operators = QPlainTextEdit()
         self.shifts = QPlainTextEdit()
         self.workorders = QPlainTextEdit()
+        self.iqr_codes = QPlainTextEdit()
         vrow = QHBoxLayout()
         for title, w in (("EN (พนักงาน)", self.operators), ("Shift", self.shifts),
-                         ("Workorder (= Lot ตอน Generate)", self.workorders)):
+                         ("Workorder (= Lot ตอน Generate)", self.workorders), ("iQR code", self.iqr_codes)):
             w.setMinimumHeight(160)
             w.setPlaceholderText("บรรทัดละ 1 รายการ")
             col = QVBoxLayout()
@@ -194,6 +195,7 @@ class SettingsTab(QWidget):
         self.operators.setPlainText("\n".join(self.work.operators))
         self.shifts.setPlainText("\n".join(self.work.shifts))
         self.workorders.setPlainText("\n".join(self.work.workorders))
+        self.iqr_codes.setPlainText("\n".join(self.work.iqr_codes))
         self._fill_list(self.work.last_product)
 
     def _fill_list(self, select: str | None = None) -> None:
@@ -290,6 +292,7 @@ class SettingsTab(QWidget):
         self.work.operators = lines_of(self.operators)
         self.work.shifts = lines_of(self.shifts)
         self.work.workorders = lines_of(self.workorders)
+        self.work.iqr_codes = lines_of(self.iqr_codes)
         if self.work.last_product not in self.work.products:
             self.work.last_product = next(iter(self.work.products))
         try:

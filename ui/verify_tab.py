@@ -25,7 +25,7 @@ def big_font(size: int, bold: bool = True) -> QFont:
 
 class VerifyTab(QWidget):
     verified = Signal()
-    COLS = ["เวลา", "Serial", "ผล", "สาเหตุ", "EN", "Shift", "Workorder"]
+    COLS = ["เวลา", "Serial", "ผล", "สาเหตุ", "iQR", "EN", "Shift", "Workorder"]
 
     def __init__(self, win):
         super().__init__()
@@ -36,17 +36,20 @@ class VerifyTab(QWidget):
         self.en = QComboBox()
         self.shift = QComboBox()
         self.workorder = QComboBox()
-        for c in (self.en, self.shift, self.workorder):
+        self.iqr = QComboBox()
+        for c in (self.en, self.shift, self.workorder, self.iqr):
             c.setMinimumWidth(160)
             c.setMinimumHeight(32)
             c.setFont(big_font(12, False))
-        sel = QHBoxLayout()
-        for label, w in (("EN", self.en), ("Shift", self.shift), ("Workorder", self.workorder)):
+        sel = QGridLayout()
+        for i, (label, w) in enumerate((("EN", self.en), ("Shift", self.shift),
+                                        ("Workorder", self.workorder), ("iQR code", self.iqr))):
             lbl = QLabel(label)
             lbl.setFont(big_font(12))
-            sel.addWidget(lbl)
-            sel.addWidget(w, 1)
-            sel.addSpacing(12)
+            sel.addWidget(lbl, i // 2, (i % 2) * 2)
+            sel.addWidget(w, i // 2, (i % 2) * 2 + 1)
+        sel.setColumnStretch(1, 1)
+        sel.setColumnStretch(3, 1)
 
         # ---- ช่องสแกน
         self.scan = QLineEdit()
@@ -96,6 +99,9 @@ class VerifyTab(QWidget):
         lay = QVBoxLayout(self)
         lay.addLayout(sel)
         lay.addSpacing(6)
+        scan_lbl = QLabel("Serial (สแกน code บนชิ้นงาน)")
+        scan_lbl.setFont(big_font(12))
+        lay.addWidget(scan_lbl)
         lay.addWidget(self.scan)
         lay.addWidget(self.scan_hint)
         lay.addWidget(self.result_box)
@@ -103,7 +109,7 @@ class VerifyTab(QWidget):
         lay.addWidget(QLabel("ประวัติการ verify ล่าสุด (Workorder ที่เลือก)"))
         lay.addWidget(self.table, 1)
 
-        for c in (self.en, self.shift, self.workorder):
+        for c in (self.en, self.shift, self.workorder, self.iqr):
             c.currentIndexChanged.connect(self._selection_changed)
         self.scan.returnPressed.connect(self.do_verify)
         self._show_idle()
@@ -112,7 +118,7 @@ class VerifyTab(QWidget):
     def reload(self) -> None:
         app = self.win.app
         for combo, items in ((self.en, app.operators), (self.shift, app.shifts),
-                             (self.workorder, app.workorders)):
+                             (self.workorder, app.workorders), (self.iqr, app.iqr_codes)):
             cur = combo.currentData()
             combo.blockSignals(True)
             combo.clear()
@@ -124,8 +130,9 @@ class VerifyTab(QWidget):
             combo.blockSignals(False)
         self._selection_changed()
 
-    def selection(self) -> tuple[str | None, str | None, str | None]:
-        return self.en.currentData(), self.shift.currentData(), self.workorder.currentData()
+    def selection(self) -> tuple[str | None, str | None, str | None, str | None]:
+        return (self.en.currentData(), self.shift.currentData(), self.workorder.currentData(),
+                self.iqr.currentData())
 
     def ready(self) -> bool:
         return all(self.selection())
@@ -138,11 +145,11 @@ class VerifyTab(QWidget):
             self.scan_hint.setText("สแกนแล้วระบบตรวจทันที (เครื่องสแกนกด Enter ให้เอง)")
             self.focus_scan()
         else:
-            missing = [n for n, v in zip(("EN", "Shift", "Workorder"), self.selection()) if not v]
+            missing = [n for n, v in zip(("EN", "Shift", "Workorder", "iQR code"), self.selection()) if not v]
             self.scan.setPlaceholderText("เลือก " + ", ".join(missing) + " ก่อน")
             app = self.win.app
-            if not (app.operators and app.workorders):
-                self.scan_hint.setText("ยังไม่มีรายการ EN / Workorder ให้ Engineer เพิ่มในหน้า Settings")
+            if not (app.operators and app.workorders and app.iqr_codes):
+                self.scan_hint.setText("ยังไม่มีรายการ EN / Workorder / iQR code ให้ Engineer เพิ่มในหน้า Settings")
             else:
                 self.scan_hint.setText("")
         self.refresh()
@@ -172,9 +179,9 @@ class VerifyTab(QWidget):
         self.scan.clear()
         if not self.ready() or not raw.strip():
             return self.focus_scan()
-        en, shift, wo = self.selection()
+        en, shift, wo, iqr = self.selection()
         try:
-            r = hl.verify(self.win.store, raw, en, shift, wo)
+            r = hl.verify(self.win.store, raw, en, shift, wo, iqr=iqr)
         except (ValueError, OSError) as e:
             error(self, f"บันทึกผลไม่ได้\n\n{e}")
             return self.focus_scan()
@@ -203,7 +210,8 @@ class VerifyTab(QWidget):
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             vals = [row["scanned_at"].replace("T", " "), row["serial"], row["result"],
-                    REASON_TH.get(row["reason"], row["reason"]), row["en"], row["shift"], row["workorder"]]
+                    REASON_TH.get(row["reason"], row["reason"]), row["iqr"], row["en"], row["shift"],
+                    row["workorder"]]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v)
                 if c == 2:

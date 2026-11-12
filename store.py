@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS verifications (
     en         TEXT NOT NULL,
     shift      TEXT NOT NULL,
     workorder  TEXT NOT NULL,
+    iqr        TEXT NOT NULL DEFAULT '',
     result     TEXT NOT NULL,          -- PASS | FAIL
     reason     TEXT NOT NULL DEFAULT '' -- '' | NOT_FOUND | WRONG_WORKORDER | DUPLICATE
 );
@@ -52,6 +53,13 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """เพิ่มคอลัมน์ใหม่ให้ DB ที่สร้างจากเวอร์ชันก่อน"""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(verifications)")}
+        if "iqr" not in cols:
+            self.conn.execute("ALTER TABLE verifications ADD COLUMN iqr TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         self.conn.close()
@@ -119,11 +127,12 @@ class Store:
             (serial,)).fetchone()
 
     def add_verification(self, scanned_at: str, raw_code: str, serial: str, product: str, en: str,
-                         shift: str, workorder: str, result: str, reason: str) -> int:
+                         shift: str, workorder: str, result: str, reason: str, iqr: str = "") -> int:
         cur = self.conn.execute(
-            "INSERT INTO verifications (scanned_at, raw_code, serial, product, en, shift, workorder, result, reason)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (scanned_at, raw_code, serial, product, en, shift, workorder, result, reason))
+            "INSERT INTO verifications"
+            " (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason))
         return cur.lastrowid
 
     def list_verifications(self, workorder: str | None = None, limit: int = 300) -> list[sqlite3.Row]:
