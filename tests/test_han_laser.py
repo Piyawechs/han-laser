@@ -98,6 +98,19 @@ class GenerateTest(Base):
             self.assertIsNone(s.last_seq("ceramic_box", "2026-11"))
         self.assertEqual(self.gen(1).serials, ["CB26110001"])
 
+    def test_missing_txt_dir_outside_project_rejected(self):
+        self.app.products["lid"].serial_txt = str(self.dir.parent / "no_such_dir_xyz" / "s.txt")
+        with self.assertRaises(ValueError) as cm:
+            self.gen(1, "lid")
+        self.assertIn("Settings", str(cm.exception))
+        with hl.open_store(self.app) as s:
+            self.assertEqual(s.list_batches(), [])
+
+    def test_txt_dir_inside_project_created(self):
+        self.app.products["lid"].serial_txt = "serial/deep/s.txt"
+        self.gen(1, "lid")
+        self.assertTrue((self.dir / "serial/deep/s.txt").exists())
+
     def test_preview_does_not_write(self):
         self.assertEqual(hl.preview(self.app, "lid", 2, now=self.day1), ["LD26110001", "LD26110002"])
         self.assertEqual(self.gen(1, "lid").serials, ["LD26110001"])

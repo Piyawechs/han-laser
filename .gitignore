@@ -1,6 +1,7 @@
 # ค่าเฉพาะเครื่อง และข้อมูลที่โปรแกรมสร้างตอนรัน
 config.json
 data/
+serial/
 __pycache__/
 *.pyc
 *.png

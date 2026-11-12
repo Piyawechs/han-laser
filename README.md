@@ -66,6 +66,8 @@ python han_laser.py -p lid run -n 50 --lot LOT002           # generate แล้
 - `han_laser.db`: SQLite มีตาราง `batches` (แต่ละครั้งที่สร้าง) และ `serials` (ทุกตัว ซ้ำไม่ได้)
 - `archive/`: สำเนาไฟล์ .txt เดิมก่อนถูกเขียนทับ
 
+ไฟล์ serial `.txt` อยู่ที่ `serial/` ในโฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น) และไม่อยู่ใน git ใน Serial setup ของ template ให้ชี้มาที่ไฟล์ในโฟลเดอร์นี้ หรือเปลี่ยน path ในหน้า Settings
+
 การ generate ทำใน transaction ถ้าเขียนไฟล์ .txt ไม่สำเร็จ จะไม่มีอะไรถูกบันทึกลง DB
 ไฟล์ `history.csv` และ `state.json` ของเวอร์ชันก่อนเลิกใช้แล้ว ลบทิ้งได้
 

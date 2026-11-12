@@ -1,5 +1,5 @@
 {
-  "_comment": "คัดลอกเป็น config.json (UI ทำให้เองตอนเปิดครั้งแรก) แก้ได้ในหน้า Settings ของ UI หรือแก้ไฟล์นี้ตรง ๆ (ใช้ / ใน path)",
+  "_comment": "คัดลอกเป็น config.json (UI ทำให้เองตอนเปิดครั้งแรก) แก้ได้ในหน้า Settings ของ UI หรือแก้ไฟล์นี้ตรง ๆ (ใช้ / ใน path) path แบบ relative นับจากโฟลเดอร์ของไฟล์นี้",
 
   "db_file": "data/han_laser.db",
   "archive_dir": "data/archive",
@@ -16,7 +16,7 @@
       "seq_start": 1,
       "seq_max": 9999,
       "template": "C:/Users/Administrator/Desktop/Back up/test2.hs",
-      "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial_ceramic_box.txt",
+      "serial_txt": "serial/serial_ceramic_box.txt",
       "marking_exe": "",
       "launch_args": ["{template}"],
       "image": "images/ceramic_box.png"
@@ -30,7 +30,7 @@
       "seq_start": 1,
       "seq_max": 9999,
       "template": "C:/Users/Administrator/Desktop/Back up/lid.hs",
-      "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial_lid.txt",
+      "serial_txt": "serial/serial_lid.txt",
       "marking_exe": "",
       "launch_args": ["{template}"],
       "image": "images/lid.png"

@@ -192,6 +192,22 @@ class Batch:
     created_at: str
 
 
+def ensure_txt_dir(app: AppConfig, prod: Product) -> Path:
+    """โฟลเดอร์ของไฟล์ .txt ต้องมีอยู่แล้ว (สร้างให้เฉพาะเมื่ออยู่ในโฟลเดอร์โปรเจกต์)"""
+    txt = app.abspath(prod.serial_txt)
+    parent = txt.parent
+    if parent.is_dir():
+        return txt
+    base = app.path.resolve().parent if app.path else None
+    if base and (parent.resolve() == base or base in parent.resolve().parents):
+        parent.mkdir(parents=True, exist_ok=True)
+        return txt
+    raise ValueError(
+        f"ไม่พบโฟลเดอร์ (หรือไม่มีสิทธิ์เข้าถึง): {parent}\n"
+        f"แก้ช่อง 'ไฟล์ serial .txt' ของ {prod.name} ในหน้า Settings ให้อยู่ในโฟลเดอร์ที่มีอยู่จริง"
+    )
+
+
 def next_seq(store: Store, prod: Product, now: datetime) -> int:
     """เลขลำดับตัวถัดไป (ยังไม่บันทึก)"""
     last = store.last_seq(prod.id, prod.period_key(now))
@@ -228,6 +244,7 @@ def generate(app: AppConfig, product_id: str | None, count: int, lot: str = "",
              now: datetime | None = None, store: Store | None = None) -> Batch:
     now = now or datetime.now()
     prod = app.product(product_id)
+    txt = ensure_txt_dir(app, prod)
     own = store is None
     store = store or open_store(app)
     try:
@@ -240,7 +257,6 @@ def generate(app: AppConfig, product_id: str | None, count: int, lot: str = "",
             if dup:
                 raise ValueError(f"พบ serial ซ้ำกับที่เคยสร้าง: {dup[:5]} ตรวจ serial_format/seq_reset")
 
-            txt = app.abspath(prod.serial_txt)
             stamp = now.isoformat(timespec="seconds")
             try:
                 batch_id = store.add_batch(prod.id, lot, serials, list(range(start, start + count)),
