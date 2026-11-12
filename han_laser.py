@@ -1,77 +1,167 @@
 """han-laser: สร้างไฟล์ serial number (.txt) ให้ Han's Laser Marking Control Software V4.0.1
-อ่านทีละบรรทัด (1 บรรทัด = 1 ชิ้นที่มาร์ก) และเปิดซอฟต์แวร์พร้อม template
+อ่านทีละบรรทัด ("Obtained from files (Each Line)": 1 บรรทัด = 1 ชิ้นที่มาร์ก) และเปิด template (.hs)
 
-ใช้ได้กับ Python 3.9+ ไม่ต้องติดตั้ง package เพิ่ม
+แต่ละ product มีรูปแบบ serial, template และไฟล์ .txt ของตัวเอง ประวัติเก็บใน SQLite
+core นี้ใช้ได้กับ Python 3.9+ ไม่ต้องติดตั้ง package เพิ่ม (UI ใช้ PySide6 แยกไฟล์)
 
-    python han_laser.py generate --count 100 --lot LOT001
-    python han_laser.py launch
-    python han_laser.py run --count 100 --lot LOT001     (generate + launch)
     python han_laser.py status
+    python han_laser.py -p ceramic_box generate -n 100 --lot LOT001
+    python han_laser.py -p lid launch
+    python han_laser.py -p lid run -n 100 --lot LOT001     (generate + launch)
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
+
+from store import Store
 
 DEFAULT_CONFIG = "config.json"
 
 # seq_reset -> รูปแบบ strftime ของรอบ (never = รอบเดียวตลอด)
 PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "never": "all"}
+PRODUCT_ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 # ---------------------------------------------------------------- config
 
+def _check_keys(cls, raw: dict, where: str) -> dict:
+    raw = {k: v for k, v in raw.items() if not k.startswith("_")}  # "_comment" keys
+    unknown = set(raw) - {f.name for f in fields(cls)}
+    if unknown:
+        raise ValueError(f"{where}: มี key ที่ไม่รู้จัก {sorted(unknown)}")
+    return raw
+
+
 @dataclass
-class Config:
+class Product:
+    id: str
+    name: str
     template: str                     # ไฟล์ .hs (HS.Document)
     serial_txt: str
-    marking_exe: str = ""             # ว่าง = เปิด .hs ด้วยโปรแกรมที่ Windows ผูกไว้
+    prefix: str = ""
     serial_format: str = "{prefix}{date:%y%m}{seq:04d}"
-    prefix: str = "CB"
+    seq_reset: str = "monthly"        # "daily" | "monthly" | "never"
     seq_start: int = 1
     seq_max: int = 9999
-    seq_reset: str = "monthly"        # "daily" | "monthly" | "never"
+    marking_exe: str = ""             # ว่าง = เปิด .hs ด้วยโปรแกรมที่ Windows ผูกไว้
+    launch_args: list = field(default_factory=lambda: ["{template}"])
+    image: str = ""                   # รูปตัวอย่างตำแหน่งที่มาร์ก
+
+    def validate(self) -> None:
+        p = f"product '{self.id}'"
+        if not PRODUCT_ID_RE.match(self.id):
+            raise ValueError(f"{p}: id ใช้ได้แค่ a-z 0-9 _")
+        if not self.name.strip():
+            raise ValueError(f"{p}: ต้องมีชื่อ")
+        if self.seq_reset not in PERIOD_FORMATS:
+            raise ValueError(f"{p}: seq_reset ต้องเป็นหนึ่งใน {list(PERIOD_FORMATS)}")
+        if not (0 <= self.seq_start <= self.seq_max):
+            raise ValueError(f"{p}: ต้องเป็น 0 <= seq_start <= seq_max")
+        if "{seq" not in self.serial_format:
+            raise ValueError(f"{p}: serial_format ต้องมี {{seq}} เช่น {{seq:04d}}")
+        try:
+            self.format_serial(datetime(2026, 1, 1), self.seq_start)
+        except (KeyError, ValueError, IndexError) as e:
+            raise ValueError(f"{p}: serial_format ไม่ถูกต้อง ({e!r})") from None
+        if not self.template.strip() or not self.serial_txt.strip():
+            raise ValueError(f"{p}: ต้องระบุ template และ serial_txt")
+
+    def format_serial(self, now: datetime, seq: int) -> str:
+        return self.serial_format.format(prefix=self.prefix, date=now, seq=seq)
+
+    def period_key(self, now: datetime) -> str:
+        """รอบของเลขลำดับ เปลี่ยนรอบเมื่อไรเลขลำดับเริ่มที่ seq_start ใหม่"""
+        return now.strftime(PERIOD_FORMATS[self.seq_reset])
+
+
+@dataclass
+class AppConfig:
+    products: dict = field(default_factory=dict)     # id -> Product
+    db_file: str = "data/han_laser.db"
+    archive_dir: str = "data/archive"
     txt_encoding: str = "utf-8"
     txt_newline: str = "\r\n"
-    launch_args: list = field(default_factory=lambda: ["{template}"])
-    state_file: str = "data/state.json"
-    history_csv: str = "data/history.csv"
-    archive_dir: str = "data/archive"
+    last_product: str = ""
+    path: Path | None = field(default=None, repr=False, compare=False)
+
+    # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
+    def abspath(self, p: str) -> Path:
+        q = Path(p)
+        if q.is_absolute() or self.path is None:
+            return q
+        return self.path.resolve().parent / q
+
+    def product(self, product_id: str | None = None) -> Product:
+        pid = product_id or self.last_product or next(iter(self.products), "")
+        if pid not in self.products:
+            raise ValueError(f"ไม่พบ product '{pid}' (มี: {', '.join(self.products) or '-'})")
+        return self.products[pid]
+
+    def validate(self) -> None:
+        if not self.products:
+            raise ValueError("config ต้องมีอย่างน้อย 1 product")
+        for pid, prod in self.products.items():
+            if pid != prod.id:
+                raise ValueError(f"product key '{pid}' ไม่ตรงกับ id '{prod.id}'")
+            prod.validate()
+        txts = [str(self.abspath(p.serial_txt)).lower() for p in self.products.values()]
+        if len(set(txts)) != len(txts):
+            raise ValueError("แต่ละ product ต้องใช้ไฟล์ serial_txt คนละไฟล์")
+        try:
+            "".encode(self.txt_encoding)
+        except LookupError:
+            raise ValueError(f"txt_encoding ไม่ถูกต้อง: {self.txt_encoding}") from None
 
     @classmethod
-    def load(cls, path: str | Path) -> "Config":
+    def from_dict(cls, raw: dict, path: Path | None = None) -> "AppConfig":
+        raw = _check_keys(cls, raw, "config")
+        raw.pop("path", None)
+        products = {}
+        for pid, praw in (raw.pop("products", None) or {}).items():
+            praw = _check_keys(Product, dict(praw), f"product '{pid}'")
+            praw.setdefault("id", pid)
+            products[pid] = Product(**praw)
+        cfg = cls(products=products, path=path, **raw)
+        cfg.validate()
+        return cfg
+
+    @classmethod
+    def load(cls, path: str | Path) -> "AppConfig":
         path = Path(path)
         with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-        raw = {k: v for k, v in raw.items() if not k.startswith("_")}  # "_comment" keys
-        unknown = set(raw) - set(cls.__dataclass_fields__)
-        if unknown:
-            raise ValueError(f"config มี key ที่ไม่รู้จัก: {sorted(unknown)}")
-        cfg = cls(**raw)
-        # path ที่เป็น relative ให้อิงจากโฟลเดอร์ของ config
-        base = path.resolve().parent
-        for name in ("serial_txt", "state_file", "history_csv", "archive_dir", "template"):
-            p = Path(getattr(cfg, name))
-            if not p.is_absolute():
-                setattr(cfg, name, str(base / p))
-        if cfg.seq_reset not in PERIOD_FORMATS:
-            raise ValueError(f"seq_reset ต้องเป็นหนึ่งใน {list(PERIOD_FORMATS)}")
-        return cfg
+            return cls.from_dict(json.load(f), path)
+
+    def to_dict(self) -> dict:
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("products", "path")}
+        d["products"] = {pid: {k: v for k, v in asdict(p).items() if k != "id"}
+                         for pid, p in self.products.items()}
+        return d
+
+    def save(self, path: str | Path | None = None) -> None:
+        self.validate()
+        target = Path(path) if path else self.path
+        if target is None:
+            raise ValueError("ไม่ได้ระบุ path ของ config")
+        atomic_write_text(target, json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n", "utf-8")
+        self.path = target
 
 
 # ---------------------------------------------------------------- helpers
 
 def atomic_write_text(path: Path, text: str, encoding: str) -> None:
     """เขียนลงไฟล์ชั่วคราวแล้ว rename ทับ กันซอฟต์แวร์มาร์กอ่านเจอไฟล์ที่เขียนไม่เสร็จ"""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     try:
@@ -86,112 +176,108 @@ def atomic_write_text(path: Path, text: str, encoding: str) -> None:
         raise
 
 
-def load_state(path: Path) -> dict:
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_state(path: Path, state: dict) -> None:
-    atomic_write_text(path, json.dumps(state, indent=2, ensure_ascii=False), "utf-8")
-
-
-def load_history_serials(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-    with open(path, encoding="utf-8", newline="") as f:
-        return {row["serial"] for row in csv.DictReader(f)}
-
-
-def append_history(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.exists()
-    with open(path, "a", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["generated_at", "lot", "serial"])
-        if new:
-            w.writeheader()
-        w.writerows(rows)
+def open_store(app: AppConfig) -> Store:
+    return Store(app.abspath(app.db_file))
 
 
 # ---------------------------------------------------------------- core
 
-def period_key(cfg: Config, now: datetime) -> str:
-    """รอบของเลขลำดับ เปลี่ยนรอบเมื่อไรเลขลำดับเริ่มที่ seq_start ใหม่"""
-    return now.strftime(PERIOD_FORMATS[cfg.seq_reset])
+@dataclass
+class Batch:
+    id: int
+    product: str
+    lot: str
+    serials: list
+    txt_path: str
+    created_at: str
 
 
-def next_seq(cfg: Config, state: dict, now: datetime) -> int:
+def next_seq(store: Store, prod: Product, now: datetime) -> int:
     """เลขลำดับตัวถัดไป (ยังไม่บันทึก)"""
-    if not state or state.get("period") != period_key(cfg, now):
-        return cfg.seq_start
-    return state["last_seq"] + 1
+    last = store.last_seq(prod.id, prod.period_key(now))
+    return prod.seq_start if last is None else last + 1
 
 
-def make_serials(cfg: Config, count: int, start_seq: int, now: datetime) -> list[str]:
-    end = start_seq + count - 1
-    if end > cfg.seq_max:
-        raise ValueError(
-            f"เลขลำดับเกิน seq_max ({cfg.seq_max}): ขอ {start_seq}..{end} "
-            f"เหลือใช้ได้อีก {max(cfg.seq_max - start_seq + 1, 0)} ตัว"
-        )
-    return [
-        cfg.serial_format.format(prefix=cfg.prefix, date=now, seq=s)
-        for s in range(start_seq, end + 1)
-    ]
-
-
-def generate(cfg: Config, count: int, lot: str = "", now: datetime | None = None) -> list[str]:
+def make_serials(prod: Product, count: int, start_seq: int, now: datetime) -> list[str]:
     if count < 1:
-        raise ValueError("count ต้องมากกว่า 0")
-    now = now or datetime.now()
-    state_path = Path(cfg.state_file)
-    state = load_state(state_path)
-
-    start = next_seq(cfg, state, now)
-    serials = make_serials(cfg, count, start, now)
-
-    dup_in_batch = len(set(serials)) != len(serials)
-    dup_history = load_history_serials(Path(cfg.history_csv)) & set(serials)
-    if dup_in_batch or dup_history:
-        sample = sorted(dup_history)[:5]
+        raise ValueError("จำนวนต้องมากกว่า 0")
+    end = start_seq + count - 1
+    if end > prod.seq_max:
         raise ValueError(
-            "พบ serial ซ้ำ ตรวจ serial_format ว่ามี {seq} อยู่ด้วย"
-            + (f" (ซ้ำกับที่เคยสร้าง: {sample})" if sample else "")
+            f"เลขลำดับเกิน seq_max ({prod.seq_max}): ขอ {start_seq}..{end} "
+            f"เหลือใช้ได้อีก {max(prod.seq_max - start_seq + 1, 0)} ตัว"
         )
-
-    txt = Path(cfg.serial_txt)
-    if txt.exists():
-        # ไฟล์เดิมอาจยังมาร์กไม่หมด เก็บสำรองไว้ก่อนเขียนทับ
-        archive = Path(cfg.archive_dir)
-        archive.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(txt, archive / f"{txt.stem}_{now:%Y%m%d_%H%M%S}{txt.suffix}")
-
-    text = cfg.txt_newline.join(serials) + cfg.txt_newline
-    atomic_write_text(txt, text, cfg.txt_encoding)
-
-    stamp = now.isoformat(timespec="seconds")
-    append_history(Path(cfg.history_csv),
-                   [{"generated_at": stamp, "lot": lot, "serial": s} for s in serials])
-    save_state(state_path, {"period": period_key(cfg, now), "last_seq": start + count - 1,
-                            "last_lot": lot, "updated_at": stamp})
-    return serials
+    return [prod.format_serial(now, s) for s in range(start_seq, end + 1)]
 
 
-def launch(cfg: Config) -> str:
-    """เปิด template คืนค่าข้อความบอกว่าเปิดด้วยอะไร"""
-    if not Path(cfg.template).exists():
-        raise FileNotFoundError(f"ไม่พบ template: {cfg.template}")
-    if not cfg.marking_exe:
+def preview(app: AppConfig, product_id: str | None, count: int,
+            now: datetime | None = None, store: Store | None = None) -> list[str]:
+    """serial ที่จะได้ถ้า generate ตอนนี้ (ไม่บันทึกอะไร)"""
+    now = now or datetime.now()
+    prod = app.product(product_id)
+    own = store is None
+    store = store or open_store(app)
+    try:
+        return make_serials(prod, count, next_seq(store, prod, now), now)
+    finally:
+        if own:
+            store.close()
+
+
+def generate(app: AppConfig, product_id: str | None, count: int, lot: str = "",
+             now: datetime | None = None, store: Store | None = None) -> Batch:
+    now = now or datetime.now()
+    prod = app.product(product_id)
+    own = store is None
+    store = store or open_store(app)
+    try:
+        with store.transaction():
+            start = next_seq(store, prod, now)
+            serials = make_serials(prod, count, start, now)
+            if len(set(serials)) != len(serials):
+                raise ValueError("serial ในชุดนี้ซ้ำกันเอง ตรวจ serial_format ว่ามี {seq} อยู่ด้วย")
+            dup = store.existing(serials)
+            if dup:
+                raise ValueError(f"พบ serial ซ้ำกับที่เคยสร้าง: {dup[:5]} ตรวจ serial_format/seq_reset")
+
+            txt = app.abspath(prod.serial_txt)
+            stamp = now.isoformat(timespec="seconds")
+            try:
+                batch_id = store.add_batch(prod.id, lot, serials, list(range(start, start + count)),
+                                           prod.period_key(now), str(txt), stamp)
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"บันทึกไม่ได้ serial ซ้ำ ({e})") from None
+
+            if txt.exists():
+                # ไฟล์เดิมอาจยังมาร์กไม่หมด เก็บสำรองไว้ก่อนเขียนทับ
+                archive = app.abspath(app.archive_dir)
+                archive.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(txt, archive / f"{txt.stem}_{now:%Y%m%d_%H%M%S}{txt.suffix}")
+            # เขียนไฟล์เป็นขั้นสุดท้าย ถ้าเขียนไม่ได้ transaction จะ rollback ไม่มีอะไรถูกบันทึก
+            atomic_write_text(txt, app.txt_newline.join(serials) + app.txt_newline, app.txt_encoding)
+        return Batch(batch_id, prod.id, lot, serials, str(txt), stamp)
+    finally:
+        if own:
+            store.close()
+
+
+def launch(app: AppConfig, product_id: str | None = None) -> str:
+    """เปิด template ของ product คืนค่าข้อความบอกว่าเปิดด้วยอะไร"""
+    prod = app.product(product_id)
+    template = app.abspath(prod.template)
+    if not template.exists():
+        raise FileNotFoundError(f"ไม่พบ template: {template}")
+    if not prod.marking_exe:
         # .hs ผูกกับโปรแกรม Han's ไว้แล้ว เหมือนดับเบิลคลิกไฟล์
         if not hasattr(os, "startfile"):
             raise OSError("เปิดแบบไม่ระบุ marking_exe ได้เฉพาะบน Windows")
-        os.startfile(cfg.template)
+        os.startfile(str(template))
         return "โปรแกรมที่ผูกกับ .hs"
-    exe = Path(cfg.marking_exe)
+    exe = Path(prod.marking_exe)
     if not exe.exists():
         raise FileNotFoundError(f"ไม่พบโปรแกรมมาร์ก: {exe}")
-    args = [a.format(template=cfg.template, serial_txt=cfg.serial_txt) for a in cfg.launch_args]
+    txt = app.abspath(prod.serial_txt)
+    args = [a.format(template=template, serial_txt=txt) for a in prod.launch_args]
     subprocess.Popen([str(exe), *args], cwd=str(exe.parent))
     return str(exe)
 
@@ -202,30 +288,30 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="han_laser", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-c", "--config", default=DEFAULT_CONFIG)
+    ap.add_argument("-p", "--product", default=None, help="id ของ product (ค่าเริ่มต้น: last_product)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("generate", "run"):
-        p = sub.add_parser(name, help="สร้างไฟล์ serial" + (" แล้วเปิดโปรแกรมมาร์ก" if name == "run" else ""))
+        p = sub.add_parser(name, help="สร้างไฟล์ serial" + (" แล้วเปิด template" if name == "run" else ""))
         p.add_argument("-n", "--count", type=int, required=True)
         p.add_argument("--lot", default="")
-    sub.add_parser("launch", help="เปิดโปรแกรมมาร์กพร้อม template")
-    sub.add_parser("status", help="แสดงเลขล่าสุดและตัวถัดไป")
+    sub.add_parser("launch", help="เปิด template ของ product")
+    sub.add_parser("status", help="แสดง serial ตัวถัดไปของทุก product")
     args = ap.parse_args(argv)
 
     try:
-        cfg = Config.load(args.config)
+        app = AppConfig.load(args.config)
         if args.cmd in ("generate", "run"):
-            serials = generate(cfg, args.count, args.lot)
-            print(f"สร้าง {len(serials)} serial: {serials[0]} .. {serials[-1]}")
-            print(f"เขียนลง {cfg.serial_txt}")
+            b = generate(app, args.product, args.count, args.lot)
+            print(f"[{b.product}] สร้าง {len(b.serials)} serial: {b.serials[0]} .. {b.serials[-1]}")
+            print(f"เขียนลง {b.txt_path}")
         if args.cmd in ("launch", "run"):
-            how = launch(cfg)
-            print(f"เปิด {cfg.template} ด้วย {how}")
+            how = launch(app, args.product)
+            print(f"เปิด template ของ {app.product(args.product).id} ด้วย {how}")
         if args.cmd == "status":
-            state = load_state(Path(cfg.state_file))
-            now = datetime.now()
-            seq = next_seq(cfg, state, now)
-            print("state:", json.dumps(state, ensure_ascii=False) if state else "(ยังไม่เคยสร้าง)")
-            print("serial ตัวถัดไป:", cfg.serial_format.format(prefix=cfg.prefix, date=now, seq=seq))
+            with open_store(app) as store:
+                for prod in app.products.values():
+                    nxt = preview(app, prod.id, 1, store=store)[0]
+                    print(f"{prod.id:15} {prod.name:20} ตัวถัดไป: {nxt}")
     except (ValueError, FileNotFoundError, OSError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

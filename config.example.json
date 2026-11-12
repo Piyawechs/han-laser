@@ -1,22 +1,39 @@
 {
-  "_comment": "คัดลอกเป็น config.json แล้วแก้ path ให้ตรงกับเครื่องมาร์ก (ใช้ / หรือ \\\\ ใน path)",
+  "_comment": "คัดลอกเป็น config.json (UI ทำให้เองตอนเปิดครั้งแรก) แก้ได้ในหน้า Settings ของ UI หรือแก้ไฟล์นี้ตรง ๆ (ใช้ / ใน path)",
 
-  "template": "C:/Users/Administrator/Desktop/Back up/test2.hs",
-  "_comment_exe": "marking_exe ว่าง = เปิด .hs ด้วยโปรแกรมที่ Windows ผูกไว้ (HS Microsoft) เหมือนดับเบิลคลิก",
-  "marking_exe": "",
-  "launch_args": ["{template}"],
-
-  "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial.txt",
+  "db_file": "data/han_laser.db",
+  "archive_dir": "data/archive",
   "txt_encoding": "utf-8",
   "txt_newline": "\r\n",
+  "last_product": "ceramic_box",
 
-  "serial_format": "{prefix}{date:%y%m}{seq:04d}",
-  "prefix": "CB",
-  "seq_start": 1,
-  "seq_max": 9999,
-  "seq_reset": "monthly",
-
-  "state_file": "data/state.json",
-  "history_csv": "data/history.csv",
-  "archive_dir": "data/archive"
+  "products": {
+    "ceramic_box": {
+      "name": "Ceramic Box",
+      "prefix": "CB",
+      "serial_format": "{prefix}{date:%y%m}{seq:04d}",
+      "seq_reset": "monthly",
+      "seq_start": 1,
+      "seq_max": 9999,
+      "template": "C:/Users/Administrator/Desktop/Back up/test2.hs",
+      "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial_ceramic_box.txt",
+      "marking_exe": "",
+      "launch_args": ["{template}"],
+      "image": "images/ceramic_box.png"
+    },
+    "lid": {
+      "_comment": "รูปแบบ LD... เป็นค่าสมมติ รอยืนยัน",
+      "name": "Lid",
+      "prefix": "LD",
+      "serial_format": "{prefix}{date:%y%m}{seq:04d}",
+      "seq_reset": "monthly",
+      "seq_start": 1,
+      "seq_max": 9999,
+      "template": "C:/Users/Administrator/Desktop/Back up/lid.hs",
+      "serial_txt": "C:/Users/Administrator/Desktop/Back up/serial_lid.txt",
+      "marking_exe": "",
+      "launch_args": ["{template}"],
+      "image": "images/lid.png"
+    }
+  }
 }
