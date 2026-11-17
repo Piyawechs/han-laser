@@ -48,9 +48,10 @@ class CameraWorker(QThread):
     frame = Signal(QImage)        # ภาพ preview (ย่อแล้ว วาดกรอบ code แล้ว)
 
     def __init__(self, index: str = "auto", width: int = 1280, height: int = 1024,
-                 pattern: re.Pattern | None = None):
+                 pattern: re.Pattern | None = None, device: str = "", device_name: str = ""):
         super().__init__()
         self.index, self.width, self.height = index, width, height
+        self.device, self.device_name = device, device_name
         self.pattern = pattern            # ใช้แค่เลือกสีกรอบ: serial = เขียว, code อื่น = ส้ม
 
     def run(self) -> None:
@@ -61,24 +62,18 @@ class CameraWorker(QThread):
             self.failed.emit("ใช้กล้องไม่ได้: ยังไม่ได้ติดตั้ง package ของกล้อง\n"
                              f"(.venv\\Scripts\\pip install -r requirements.txt)  [{e}]")
             return
-        if self.index == "auto":
-            idx = dm.find_dino()
-            if idx is None:
-                names = dm.camera_names()
-                self.failed.emit("หากล้อง Dino-Lite ไม่เจอ เสียบกล้องแล้วหรือยัง?"
-                                 + (f"  (กล้องที่มี: {', '.join(names)})" if names else "")
-                                 + "  ตั้ง index เองได้ในหน้า Settings")
-                return
-        else:
-            idx = int(self.index)
+        idx, name = dm.resolve_camera(self.index, self.device)
+        if idx is None:
+            if self.device:
+                name += f"  [{self.device_name or 'กล้องที่เลือกไว้'}]"
+            self.failed.emit(name + "  เลือกกล้องได้ในหน้า Settings")
+            return
         try:
             cap = dm.open_camera(idx, self.width, self.height)
         except RuntimeError as e:
             self.failed.emit(str(e))
             return
-        names = dm.camera_names()
-        name = names[idx] if idx < len(names) else f"index {idx}"
-        self.opened.emit(f"{name}  {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+        self.opened.emit(f"{idx}: {name}  {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
                          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
         bad = 0
         try:
@@ -106,8 +101,13 @@ class CameraWorker(QThread):
             is_serial = self.pattern is None or bool(self.pattern.search("".join(r.text.split()).upper()))
             color = (0, 200, 0) if is_serial else (0, 140, 255)
             cv2.polylines(img, [np.array(r.points, np.int32)], True, color, 4)
-        s = PREVIEW_WIDTH / img.shape[1]
-        small = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        h, w = rgb.shape[:2]
-        return QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        return bgr_to_qimage(cv2, img, PREVIEW_WIDTH)
+
+
+def bgr_to_qimage(cv2, img, width: int) -> QImage:
+    """ภาพ BGR ของ OpenCV -> QImage กว้าง width (สำเนา ไม่อ้าง buffer เดิม)"""
+    s = width / img.shape[1]
+    small = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+    return QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()

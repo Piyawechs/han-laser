@@ -239,6 +239,33 @@ class CameraConfigTest(Base):
         self.assertEqual(hl.pick_serial(hl.serial_pattern(self.app), codes), "384008262264500007")
 
 
+class ResolveCameraTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            import dm_reader
+        except Exception:  # noqa: BLE001
+            self.skipTest("ไม่ได้ติดตั้ง package ของกล้อง")
+        self.dm = dm_reader
+        D = dm_reader.CameraDevice
+        self.devs = [D(0, "Integrated Camera", "p0"), D(1, "Dino-Lite Edge", "P1"), D(2, "Dino-Lite Edge", "p2")]
+
+    def test_device_path_first(self):
+        r = self.dm.resolve_camera
+        self.assertEqual(r("auto", "p2", self.devs), (2, "Dino-Lite Edge"))
+        self.assertEqual(r("0", "p1", self.devs), (1, "Dino-Lite Edge"))       # ไม่สนตัวพิมพ์
+        idx, msg = r("auto", "p9", self.devs)                                   # ไม่เจอ: ไม่เปิดตัวอื่นแทน
+        self.assertIsNone(idx)
+        self.assertIn("ไม่พบกล้อง", msg)
+        self.assertIsNone(r("1", "p1", [])[0])
+
+    def test_auto_and_index(self):
+        r = self.dm.resolve_camera
+        self.assertEqual(r("auto", "", self.devs), (1, "Dino-Lite Edge"))
+        self.assertIsNone(r("auto", "", self.devs[:1])[0])
+        self.assertEqual(r("2", "", self.devs), (2, "Dino-Lite Edge"))
+        self.assertEqual(r("5", "", []), (5, "index 5"))
+
+
 class PasswordTest(Base):
     def test_hash_and_verify(self):
         h = hl.hash_password("1234")

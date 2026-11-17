@@ -4,9 +4,10 @@ import copy
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
     QTabWidget, QVBoxLayout, QWidget,
 )
@@ -193,15 +194,22 @@ class SettingsTab(QWidget):
         fbox.setLayout(fform)
 
         # ---- กล้อง Dino-Lite (โหมดกล้องในหน้า Verify)
-        self.cam_index = QComboBox()
-        self.cam_index.setEditable(True)
-        self.cam_index.addItems(["auto", "0", "1", "2", "3"])
+        self.cam_device = QComboBox()
+        self.cam_device.setMinimumWidth(320)
+        self.cam_refresh = QPushButton("รีเฟรช")
+        self.cam_refresh.setToolTip("อ่านรายชื่อกล้องใหม่ (หลังเสียบ/ถอดกล้อง)")
+        self.cam_view_btn = QPushButton("ดูภาพ")
+        self.cam_view_btn.setToolTip("ถ่ายภาพจากกล้องที่เลือก 1 ภาพ เพื่อดูว่าเป็นกล้องตัวไหน")
+        cam_row = QHBoxLayout()
+        cam_row.addWidget(self.cam_device, 1)
+        cam_row.addWidget(self.cam_refresh)
+        cam_row.addWidget(self.cam_view_btn)
         self.cam_regex = QLineEdit()
         self.cam_help = QLabel()
         self.cam_help.setWordWrap(True)
         self.cam_help.setStyleSheet("color: #6b7280;")
         cform = QFormLayout()
-        cform.addRow("กล้อง (index)", self.cam_index)
+        cform.addRow("กล้อง", cam_row)
         cform.addRow("Serial regex", self.cam_regex)
         cform.addRow("", self.cam_help)
         cbox = QGroupBox("กล้อง Dino-Lite (โหมดกล้องในหน้า Verify)")
@@ -254,6 +262,8 @@ class SettingsTab(QWidget):
             w.valueChanged.connect(self._update_example)
         self.reset.currentIndexChanged.connect(self._update_example)
         self.image_path.edit.textChanged.connect(self._update_image)
+        self.cam_refresh.clicked.connect(self._refresh_cameras)
+        self.cam_view_btn.clicked.connect(self.preview_camera)
 
     # ------------------------------------------------------------
     def reload(self) -> None:
@@ -273,15 +283,112 @@ class SettingsTab(QWidget):
         self.fits_timeout.setValue(int(fs.timeout))
         self._update_fits_env()
         self.iqr_codes.setPlainText("\n".join(self.work.iqr_codes))
-        self.cam_index.setCurrentText(str(self.work.camera.index))
+        self._fill_cameras(self.work.camera)
         self.cam_regex.setText(self.work.camera.serial_regex)
         default = hl.default_serial_regex(self.work) or "(ไม่มี prefix: รับทุก code)"
         self.cam_regex.setPlaceholderText(f"ว่าง = {default}")
         self.cam_help.setText(
-            "<b>auto</b> = กล้องตัวแรกที่ชื่อมีคำว่า Dino (ไม่เลือกกล้องในตัวโน้ตบุ๊ก) หรือใส่เลข index<br>"
+            "<b>อัตโนมัติ</b> = กล้องตัวแรกที่ชื่อมีคำว่า Dino (ไม่เลือกกล้องในตัวโน้ตบุ๊ก)<br>"
+            "มี Dino หลายตัว: เลือกตัวที่ใช้ (กด <b>ดูภาพ</b> เพื่อดูว่าเป็นตัวไหน) โปรแกรมจำกล้องตาม USB port "
+            "ถ้าย้ายสายไป port อื่นต้องเลือกใหม่ ถ้าไม่เจอกล้องที่เลือกไว้จะไม่เปิดตัวอื่นแทน<br>"
             "ชิ้นงานอาจมีหลาย code: เฉพาะ code ที่ตรง regex เท่านั้นที่ส่งไป verify "
             f"(ไม่สนตัวพิมพ์เล็ก/ใหญ่) ว่างไว้ = ขึ้นต้นด้วย prefix ของ product: <b>{default}</b>")
         self._fill_list(self.work.last_product)
+
+    # ------------------------------------------------------------ camera
+    @staticmethod
+    def _list_devices() -> list:
+        try:
+            import dm_reader as dm
+        except Exception:  # noqa: BLE001  ยังไม่ได้ติดตั้ง package ของกล้อง
+            return []
+        return dm.list_devices()
+
+    def _fill_cameras(self, cam: hl.CameraSettings) -> None:
+        """dropdown กล้อง: item data = (index, device path, ชื่อ)"""
+        devices = self._list_devices()
+        cb = self.cam_device
+        cb.clear()
+        cb.addItem("อัตโนมัติ: Dino-Lite ตัวแรกที่เจอ", ("auto", "", ""))
+        names = [d.name for d in devices]
+        nth: dict[str, int] = {}
+        for d in devices:
+            nth[d.name] = nth.get(d.name, 0) + 1
+            label = f"{d.index}: {d.name}" + (f"  (ตัวที่ {nth[d.name]})" if names.count(d.name) > 1 else "")
+            cb.addItem(label, (str(d.index), d.path, d.name))
+        if not devices:                       # อ่านชื่อไม่ได้ (ไม่ใช่ Windows / ไม่มี pygrabber) เลือกตาม index
+            for i in range(4):
+                cb.addItem(f"index {i}", (str(i), "", ""))
+        pick = -1
+        for i in range(cb.count()):
+            idx, path, _ = cb.itemData(i)
+            if (cam.device and path and path.lower() == cam.device.lower()) or \
+                    (not cam.device and idx == cam.index):
+                pick = i
+                break
+        if pick < 0:                          # กล้องที่ตั้งไว้ไม่ได้เสียบอยู่: เก็บไว้ ไม่เปลี่ยนเอง
+            label = cam.device_name or ("กล้องที่เลือกไว้" if cam.device else f"index {cam.index}")
+            cb.addItem(f"(ไม่ได้เสียบ) {label}", (cam.index, cam.device, cam.device_name))
+            pick = cb.count() - 1
+        cb.setCurrentIndex(pick)
+
+    def _refresh_cameras(self) -> None:
+        idx, path, name = self.cam_device.currentData()
+        self._fill_cameras(hl.CameraSettings(index=idx, device=path, device_name=name))
+
+    def preview_camera(self) -> None:
+        idx, path, name = self.cam_device.currentData()
+        vt = self.win.verify_tab
+        was_running = vt.worker is not None   # หน้า Verify อาจเปิดกล้องตัวเดียวกันอยู่ ปิดก่อน
+        vt.stop_camera()
+        msg, qimg, label = "", None, name
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            try:
+                import cv2
+                import dm_reader as dm
+                from ui.camera import bgr_to_qimage
+            except Exception as e:  # noqa: BLE001
+                msg = f"ยังไม่ได้ติดตั้ง package ของกล้อง\n\n{e}"
+            else:
+                i, label = dm.resolve_camera(idx, path)
+                if i is None:
+                    msg = label
+                else:
+                    label = f"{i}: {label}"
+                    try:
+                        cap = dm.open_camera(i, self.work.camera.width, self.work.camera.height)
+                    except RuntimeError as e:
+                        msg = str(e)
+                    else:
+                        img = None
+                        try:
+                            for _ in range(8):        # เฟรมแรก ๆ อาจมืด รอให้ปรับแสงก่อน
+                                ok, f = cap.read()
+                                if ok and f is not None:
+                                    img = f
+                        finally:
+                            cap.release()
+                        if img is None:
+                            msg = "อ่านภาพจากกล้องไม่ได้"
+                        else:
+                            qimg = bgr_to_qimage(cv2, img, 640)
+        finally:
+            QApplication.restoreOverrideCursor()
+            if was_running:
+                vt.start_camera()
+        if qimg is None:
+            return error(self, msg)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"กล้อง {label}")
+        lay = QVBoxLayout(dlg)
+        pic = QLabel()
+        pic.setPixmap(QPixmap.fromImage(qimg))
+        lay.addWidget(pic)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec()
 
     def _fill_list(self, select: str | None = None) -> None:
         self.list.blockSignals(True)
@@ -406,7 +513,7 @@ class SettingsTab(QWidget):
         fs.fsp = self.fits_fsp.currentText()
         fs.timeout = float(self.fits_timeout.value())
         self.work.iqr_codes = lines_of(self.iqr_codes)
-        self.work.camera.index = self.cam_index.currentText().strip().lower() or "auto"
+        self.work.camera.index, self.work.camera.device, self.work.camera.device_name = self.cam_device.currentData()
         self.work.camera.serial_regex = self.cam_regex.text().strip()
         if self.work.last_product not in self.work.products:
             self.work.last_product = next(iter(self.work.products))

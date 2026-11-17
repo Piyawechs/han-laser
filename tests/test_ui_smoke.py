@@ -311,7 +311,7 @@ class UISmokeTest(unittest.TestCase):
             opened, failed, codes, frame = Signal(str), Signal(str), Signal(list), Signal(QImage)
             instances = []
 
-            def __init__(self, index, width, height, pattern):
+            def __init__(self, index, width, height, pattern, device="", device_name=""):
                 super().__init__()
                 self.index, self.pattern, self.running = index, pattern, False
                 FakeWorker.instances.append(self)
@@ -387,17 +387,41 @@ class UISmokeTest(unittest.TestCase):
         self.assertTrue(v.cam_retry.isHidden())
 
     def test_camera_settings_saved(self):
-        self.win.unlock = lambda: True
         st = self.win.settings_tab
-        st.reload()
-        st.cam_index.setCurrentText("1")
+        st.reload()                                          # ไม่มีรายชื่อกล้อง: เลือกตาม index
+        st.cam_device.setCurrentIndex(st.cam_device.findText("index 1"))
         st.cam_regex.setText(r"^CB\d+")
         st.save()
-        self.assertEqual((self.win.app.camera.index, self.win.app.camera.serial_regex), ("1", r"^CB\d+"))
+        c = self.win.app.camera
+        self.assertEqual((c.index, c.device, c.serial_regex), ("1", "", r"^CB\d+"))
         st.cam_regex.setText("(bad")
         with mock.patch("ui.settings_tab.error") as err:
             st.save()
         err.assert_called_once()
+
+    def test_camera_dropdown_two_dinos(self):
+        from dm_reader import CameraDevice
+        devs = [CameraDevice(0, "Integrated Camera", r"\\?\usb#vid_0bda&pid_1#a"),
+                CameraDevice(1, "Dino-Lite Edge", r"\\?\usb#vid_a168&pid_1#7&11&0&0001"),
+                CameraDevice(2, "Dino-Lite Edge", r"\\?\usb#vid_a168&pid_1#7&22&0&0002")]
+        st = self.win.settings_tab
+        with mock.patch("dm_reader.list_devices", return_value=devs):
+            st.reload()
+            items = [st.cam_device.itemText(i) for i in range(st.cam_device.count())]
+            self.assertEqual(items[2:], ["1: Dino-Lite Edge  (ตัวที่ 1)", "2: Dino-Lite Edge  (ตัวที่ 2)"])
+            st.cam_device.setCurrentIndex(3)
+            st.save()
+            c = self.win.app.camera
+            self.assertEqual((c.index, c.device, c.device_name), ("2", devs[2].path, "Dino-Lite Edge"))
+            # สลับลำดับ index (เสียบใหม่): ยังเลือกตัวเดิมตาม path
+            swapped = [devs[0], CameraDevice(1, devs[2].name, devs[2].path), CameraDevice(2, devs[1].name, devs[1].path)]
+        with mock.patch("dm_reader.list_devices", return_value=swapped):
+            st.reload()
+            self.assertEqual(st.cam_device.currentData(), ("1", devs[2].path, "Dino-Lite Edge"))
+        with mock.patch("dm_reader.list_devices", return_value=devs[:2]):  # ตัวที่เลือกถอดออก
+            st.reload()
+            self.assertTrue(st.cam_device.currentText().startswith("(ไม่ได้เสียบ)"))
+            self.assertEqual(st.cam_device.currentData()[1], devs[2].path)
 
     def test_screenshot(self):
         self.win.resize(1100, 680)

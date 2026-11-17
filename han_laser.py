@@ -141,6 +141,8 @@ class FitsSettings:
 class CameraSettings:
     """โหมดกล้อง Dino-Lite ในหน้า Verify (อ่าน DataMatrix ต่อเนื่อง)"""
     index: str = "auto"        # "auto" = กล้องตัวแรกที่ชื่อมี Dino หรือเลข index (0, 1, ...)
+    device: str = ""           # DevicePath ของกล้องที่เลือก (ผูกกับ USB port) มาก่อน index; ว่าง = ใช้ index
+    device_name: str = ""      # ชื่อกล้องที่เลือก (ไว้แสดงผล)
     serial_regex: str = ""     # code ไหนคือ serial; ว่าง = ขึ้นต้นด้วย prefix ของ product
     width: int = 1280
     height: int = 1024

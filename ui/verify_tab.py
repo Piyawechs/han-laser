@@ -250,7 +250,7 @@ class VerifyTab(QWidget):
         for b in (self.src_usb, self.src_cam):
             b.blockSignals(False)
         c = app.camera
-        same_cam = self.worker is not None and self._cam_key == (c.index, c.width, c.height)
+        same_cam = self.worker is not None and self._cam_key == (c.index, c.device, c.width, c.height)
         if same_cam:
             self.worker.pattern = self.pattern
         self._apply_source(start=not same_cam)
@@ -353,9 +353,9 @@ class VerifyTab(QWidget):
     def start_camera(self) -> None:
         self.stop_camera()
         c = self.win.app.camera
-        self._cam_key = (c.index, c.width, c.height)
+        self._cam_key = (c.index, c.device, c.width, c.height)
         self.gate.reset()
-        w = CameraWorker(c.index, c.width, c.height, self.pattern)
+        w = CameraWorker(c.index, c.width, c.height, self.pattern, c.device, c.device_name)
         w.opened.connect(self._cam_opened)
         w.failed.connect(self._cam_failed)
         w.codes.connect(self._on_codes)
@@ -365,7 +365,8 @@ class VerifyTab(QWidget):
         self.cam_view.setText("กำลังเปิดกล้อง…")
         self.cam_read.setText("")
         self.cam_status.setStyleSheet(f"color: {GREY};")
-        self.cam_status.setText("กล้อง: " + ("หา Dino-Lite อัตโนมัติ" if c.index == "auto" else f"index {c.index}"))
+        self.cam_status.setText("กล้อง: " + (c.device_name or ("หา Dino-Lite อัตโนมัติ" if c.index == "auto"
+                                                               else f"index {c.index}")))
         w.start()
 
     def stop_camera(self) -> None:

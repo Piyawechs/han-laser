@@ -25,6 +25,8 @@
   "input_mode": "usb",
   "camera": {
     "index": "auto",
+    "device": "",
+    "device_name": "",
     "serial_regex": "",
     "width": 1280,
     "height": 1024

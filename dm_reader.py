@@ -43,16 +43,59 @@ def open_camera(index: int = 0, width: int | None = 1280, height: int | None = 9
     return cap
 
 
-def camera_names() -> list[str]:
-    """ชื่อกล้องเรียงตาม index ของ DirectShow (ตรงกับ index ที่ OpenCV ใช้บน Windows)
-    ต้องมี pygrabber (Windows เท่านั้น) ถ้าไม่มีคืน []"""
+@dataclass
+class CameraDevice:
+    index: int          # index ของ DirectShow = index ที่ OpenCV ใช้บน Windows
+    name: str           # FriendlyName เช่น "Dino-Lite Edge" (กล้องรุ่นเดียวกันชื่อซ้ำกันได้)
+    path: str = ""      # DevicePath ไม่ซ้ำกัน ผูกกับ USB port (หรือ serial ของกล้องถ้ามี)
+
+
+def list_devices() -> list[CameraDevice]:
+    """กล้องทั้งหมดเรียงตาม index ของ DirectShow (Windows + pygrabber) ถ้าอ่านไม่ได้คืน []
+    เรียกจาก thread ไหนก็ได้ (init COM ให้เอง)"""
     if sys.platform != "win32":
         return []
     try:
-        from pygrabber.dshow_graph import FilterGraph
-        return list(FilterGraph().get_input_devices())
+        import comtypes
+        from comtypes import GUID
+        from comtypes.persist import IPropertyBag
+        from pygrabber.dshow_graph import SystemDeviceEnum
+        from pygrabber.dshow_ids import DeviceCategories
     except Exception:
         return []
+    try:
+        comtypes.CoInitialize()       # thread ใหม่ (เช่น QThread) ยังไม่มี COM
+        inited = True
+    except OSError:                   # init ไว้แล้วแบบอื่น ใช้ต่อได้
+        inited = False
+    out: list[CameraDevice] = []
+    try:
+        enum = SystemDeviceEnum().system_device_enum.CreateClassEnumerator(
+            GUID(DeviceCategories.VideoInputDevice), dwFlags=0)
+        try:
+            moniker, count = enum.Next(1)
+        except ValueError:            # ไม่มีกล้องเลย
+            return []
+        while count > 0:
+            bag = moniker.BindToStorage(0, 0, IPropertyBag._iid_).QueryInterface(IPropertyBag)
+            name = bag.Read("FriendlyName", pErrorLog=None)
+            try:
+                path = bag.Read("DevicePath", pErrorLog=None) or ""
+            except Exception:
+                path = ""
+            out.append(CameraDevice(len(out), str(name), str(path)))
+            moniker, count = enum.Next(1)
+    except Exception:
+        return out
+    finally:
+        if inited:
+            comtypes.CoUninitialize()
+    return out
+
+
+def camera_names() -> list[str]:
+    """ชื่อกล้องเรียงตาม index (ต้องใช้ Windows + pygrabber) ถ้าไม่รู้คืน []"""
+    return [d.name for d in list_devices()]
 
 
 def find_dino(names: list[str] | None = None) -> int | None:
@@ -62,6 +105,29 @@ def find_dino(names: list[str] | None = None) -> int | None:
         if "dino" in n.lower():
             return i
     return None
+
+
+def resolve_camera(index: str = "auto", device: str = "", devices: list[CameraDevice] | None = None
+                   ) -> tuple[int | None, str]:
+    """เลือก index ที่จะเปิด คืน (index, ชื่อ) หรือ (None, เหตุผล)
+    device (DevicePath) มาก่อน: ถ้าตั้งไว้แต่ไม่เจอจะไม่เปิดตัวอื่นแทน (กันเปิดกล้องผิดตัว)
+    ถ้าไม่ได้ตั้ง device: index = "auto" (Dino ตัวแรก) หรือตัวเลข"""
+    devices = list_devices() if devices is None else devices
+    if device:
+        for d in devices:
+            if d.path.lower() == device.lower():
+                return d.index, d.name
+        if not devices:
+            return None, "อ่านรายชื่อกล้องไม่ได้ (ต้องใช้ Windows + pygrabber)"
+        return None, "ไม่พบกล้องที่ตั้งไว้ (เสียบ USB port เดิมหรือไม่?)"
+    if index == "auto":
+        i = find_dino([d.name for d in devices])
+        if i is None:
+            have = ", ".join(d.name for d in devices)
+            return None, "หากล้อง Dino-Lite ไม่เจอ เสียบกล้องแล้วหรือยัง?" + (f"  (กล้องที่มี: {have})" if have else "")
+        return i, devices[i].name
+    i = int(index)
+    return i, devices[i].name if i < len(devices) else f"index {i}"
 
 
 def list_cameras(max_index: int = 6) -> list[tuple[int, int, int, str]]:
