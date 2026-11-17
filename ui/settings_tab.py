@@ -6,13 +6,29 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget,
-    QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 import han_laser as hl
 from ui.common import ImageLabel, error, rel_or_abs
+
+
+def pairs_of(edit: QPlainTextEdit, what: str) -> list[tuple[str, str]]:
+    """บรรทัดแบบ 'ซ้าย = ขวา' (ขวาไม่มีได้) ตัดบรรทัดว่าง/ซ้ำ"""
+    out, seen = [], set()
+    for line in edit.toPlainText().splitlines():
+        if not line.strip():
+            continue
+        left, _, right = line.partition("=")
+        left, right = left.strip(), right.strip()
+        if not left:
+            raise ValueError(f"{what}: บรรทัด '{line}' ไม่มีชื่อด้านซ้ายของ =")
+        if left not in seen:
+            seen.add(left)
+            out.append((left, right))
+    return out
 
 
 def lines_of(edit: QPlainTextEdit) -> list[str]:
@@ -135,15 +151,46 @@ class SettingsTab(QWidget):
         self.iqr_codes = QPlainTextEdit()
         vrow = QHBoxLayout()
         for title, w in (("EN (พนักงาน)", self.operators), ("Shift", self.shifts),
-                         ("Workorder (= Lot ตอน Generate)", self.workorders), ("iQR code", self.iqr_codes)):
+                         ("Workorder = WO PN", self.workorders), ("iQR code", self.iqr_codes)):
             w.setMinimumHeight(160)
             w.setPlaceholderText("บรรทัดละ 1 รายการ")
             col = QVBoxLayout()
             col.addWidget(QLabel(title))
             col.addWidget(w)
             vrow.addLayout(col)
-        vbox = QGroupBox("รายการ dropdown หน้า Verify")
+        self.workorders.setPlaceholderText("บรรทัดละ 1 รายการ\nWO = WO PN\nเช่น WO-001 = PN-123")
+        vbox = QGroupBox("รายการ dropdown หน้า Verify (Workorder ใช้เป็น Lot ตอน Generate ด้วย)")
         vbox.setLayout(vrow)
+
+        # ---- FITS
+        self.fits_enabled = QCheckBox("ส่ง FITS (handshake + log) หลัง verify ผ่านในเครื่อง")
+        self.fits_model = QLineEdit()
+        self.fits_operation = QLineEdit()
+        self.fits_params = QPlainTextEdit()
+        self.fits_params.setMinimumHeight(130)
+        self.fits_params.setPlaceholderText("บรรทัดละ 1 parameter ตามลำดับใน FITS\nชื่อ parameter = ค่า\n"
+                                            "เช่น  Serial = serial")
+        self.fits_fsp = QComboBox()
+        self.fits_fsp.addItems([",", ";", ":", "|"])
+        self.fits_timeout = QSpinBox()
+        self.fits_timeout.setRange(1, 120)
+        self.fits_timeout.setSuffix(" วินาที")
+        src_help = QLabel("ค่าที่ใช้ได้: " + ", ".join(f"<b>{k}</b> ({v})" for k, v in hl.FITS_SOURCES.items()))
+        src_help.setWordWrap(True)
+        src_help.setStyleSheet("color: #6b7280;")
+        self.fits_env = QLabel()
+        self.fits_env.setWordWrap(True)
+        fform = QFormLayout()
+        fform.addRow(self.fits_enabled)
+        fform.addRow("Model", self.fits_model)
+        fform.addRow("Operation", self.fits_operation)
+        fform.addRow("Parameters (log)", self.fits_params)
+        fform.addRow("", src_help)
+        fform.addRow("ตัวคั่น (fsp)", self.fits_fsp)
+        fform.addRow("Timeout", self.fits_timeout)
+        fform.addRow("การเชื่อมต่อ", self.fits_env)
+        fbox = QGroupBox("FITS")
+        fbox.setLayout(fform)
 
         save = QPushButton("บันทึก")
         save.setMinimumHeight(36)
@@ -165,11 +212,16 @@ class SettingsTab(QWidget):
         page2 = QWidget()
         p2 = QVBoxLayout(page2)
         p2.addWidget(vbox)
+        p2.addWidget(fbox)
         p2.addWidget(gbox)
         p2.addStretch(1)
+        scroll2 = QScrollArea()                      # จอเล็กเลื่อนดูได้
+        scroll2.setWidgetResizable(True)
+        scroll2.setFrameShape(QScrollArea.NoFrame)
+        scroll2.setWidget(page2)
         inner = QTabWidget()
         inner.addTab(page1, "Products")
-        inner.addTab(page2, "Verify และทั่วไป")
+        inner.addTab(scroll2, "Verify, FITS และทั่วไป")
 
         lay = QVBoxLayout(self)
         lay.addWidget(inner, 1)
@@ -194,7 +246,16 @@ class SettingsTab(QWidget):
         self.encoding.setCurrentText(self.work.txt_encoding)
         self.operators.setPlainText("\n".join(self.work.operators))
         self.shifts.setPlainText("\n".join(self.work.shifts))
-        self.workorders.setPlainText("\n".join(self.work.workorders))
+        pn = self.work.workorder_pn
+        self.workorders.setPlainText("\n".join(f"{w} = {pn[w]}" if pn.get(w) else w for w in self.work.workorders))
+        fs = self.work.fits
+        self.fits_enabled.setChecked(fs.enabled)
+        self.fits_model.setText(fs.model)
+        self.fits_operation.setText(fs.operation)
+        self.fits_params.setPlainText("\n".join(f"{n} = {s}" for n, s in fs.parameters))
+        self.fits_fsp.setCurrentText(fs.fsp)
+        self.fits_timeout.setValue(int(fs.timeout))
+        self._update_fits_env()
         self.iqr_codes.setPlainText("\n".join(self.work.iqr_codes))
         self._fill_list(self.work.last_product)
 
@@ -246,6 +307,21 @@ class SettingsTab(QWidget):
         p.marking_exe = self.exe.text()
         p.image = self.image_path.text()
 
+    def _update_fits_env(self) -> None:
+        try:
+            import fits_client  # noqa: F401
+            wheel = "<span style='color:#15803d'>ติดตั้ง fits_client แล้ว</span>"
+        except ImportError:
+            wheel = "<span style='color:#b91c1c'>ยังไม่ได้ติดตั้ง fabrinet_fits_client ใน .venv</span>"
+
+        def fmt(items):
+            return " ".join(f"<span style='color:{'#15803d' if ok else '#b91c1c'}'>{n} {'✓' if ok else '✗'}</span>"
+                            for n, ok in items)
+        self.fits_env.setText(f"{wheel}<br>Operator: {fmt(hl.fits_env_status(False))}"
+                              f"<br>Engineer (TEST): {fmt(hl.fits_env_status(True))}"
+                              "<br><span style='color:#6b7280'>ค่าเหล่านี้อ่านจาก fits_env.bat ข้าง start_ui.bat"
+                              " (ไม่เก็บใน config)</span>")
+
     def _update_example(self) -> None:
         p = hl.Product(id="x", name="x", template="x", serial_txt="x", prefix=self.prefix.text().strip(),
                        serial_format=self.fmt.text().strip(), seq_reset=self.reset.currentText(),
@@ -291,7 +367,20 @@ class SettingsTab(QWidget):
         self.work.txt_encoding = self.encoding.currentText().strip()
         self.work.operators = lines_of(self.operators)
         self.work.shifts = lines_of(self.shifts)
-        self.work.workorders = lines_of(self.workorders)
+        try:
+            wos = pairs_of(self.workorders, "Workorder")
+            params = pairs_of(self.fits_params, "FITS parameters")
+        except ValueError as e:
+            return error(self, f"บันทึกไม่ได้\n\n{e}")
+        self.work.workorders = [w for w, _ in wos]
+        self.work.workorder_pn = {w: pn for w, pn in wos if pn}
+        fs = self.work.fits
+        fs.enabled = self.fits_enabled.isChecked()
+        fs.model = self.fits_model.text().strip()
+        fs.operation = self.fits_operation.text().strip()
+        fs.parameters = [[n, s] for n, s in params]
+        fs.fsp = self.fits_fsp.currentText()
+        fs.timeout = float(self.fits_timeout.value())
         self.work.iqr_codes = lines_of(self.iqr_codes)
         if self.work.last_product not in self.work.products:
             self.work.last_product = next(iter(self.work.products))

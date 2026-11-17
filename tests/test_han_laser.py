@@ -276,6 +276,129 @@ class VerifyTest(Base):
             hl.verify(self.store, "CB26110001", "", "A", "WO1")
 
 
+class FitsCoreTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.app.fits = hl.FitsSettings(enabled=True, model="M", operation="OP",
+                                        parameters=[["Taira S/N", "serial"], ["WO PN", "wo_pn"]])
+
+    def test_validate(self):
+        self.app.fits.parameters = [["X", "nope"]]
+        with self.assertRaises(ValueError):
+            self.app.validate()
+        self.app.fits.parameters = []
+        with self.assertRaises(ValueError):
+            self.app.validate()
+        self.app.fits.enabled = False
+        self.app.validate()
+
+    def test_roundtrip(self):
+        self.app.workorder_pn = {"WO1": "PN1"}
+        self.app.save()
+        again = hl.AppConfig.load(self.dir / "config.json")
+        self.assertEqual(again.fits, self.app.fits)
+        self.assertEqual(again.workorder_pn, {"WO1": "PN1"})
+
+    def test_log_values_need_wo_pn(self):
+        with self.assertRaises(hl.FitsSetupError):
+            hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"})
+        self.app.workorder_pn = {"WO1": "PN1"}
+        self.assertEqual(hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"}),
+                         (["Taira S/N", "WO PN"], ["S1", "PN1"]))
+
+    def test_value_with_separator_rejected(self):
+        self.app.workorder_pn = {"WO1": "P,N"}
+        with self.assertRaises(hl.FitsSetupError):
+            hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"})
+
+    def test_client_from_env(self):
+        env = {"FITS_URL": "https://prod.example/svc", "FITS_PROJECT_ID": "1", "FITS_USER": "u",
+               "FITS_PASSWORD": "p", "FITS_REVISION": "2"}
+        try:
+            import fits_client
+        except ImportError:
+            with self.assertRaises(hl.FitsSetupError):
+                hl.make_fits_client(self.app, False, environ=env)
+            return
+        c = hl.make_fits_client(self.app, False, environ=env)
+        self.assertEqual(c.config.url, "https://prod.example/svc")
+        t = hl.make_fits_client(self.app, True, environ=env)
+        self.assertEqual(t.config.url, fits_client.TEST_URL)
+        t2 = hl.make_fits_client(self.app, True, environ=dict(env, FITS_TEST_URL="https://t.example",
+                                                              FITS_TEST_USER="tu"))
+        self.assertEqual((t2.config.url, t2.config.user_name, t2.config.project_id),
+                         ("https://t.example", "tu", "1"))
+        with self.assertRaises(hl.FitsSetupError) as cm:
+            hl.make_fits_client(self.app, False, environ={"FITS_URL": "x"})
+        self.assertIn("FITS_PASSWORD", str(cm.exception))
+        self.assertNotIn("p", [str(cm.exception)])
+
+    def test_env_status_never_returns_values(self):
+        st = hl.fits_env_status(False, environ={"FITS_URL": "secret-url"})
+        self.assertEqual(st[0], ("FITS_URL", True))
+        self.assertNotIn("secret-url", repr(st))
+
+    def test_send_outcomes(self):
+        class C:
+            def __init__(s, hs=True, lg=True, err=None):
+                s.hs, s.lg, s.err, s.calls = hs, lg, err, []
+
+            def handshake(s, *a):
+                s.calls.append("hs")
+                if s.err == "hs":
+                    raise TimeoutError("t/o")
+                return type("R", (), {"ok": s.hs, "message": "m"})
+
+            def log(s, *a):
+                s.calls.append("log")
+                if s.err == "log":
+                    raise OSError("down")
+                return type("R", (), {"ok": s.lg, "message": "m"})
+        fs = self.app.fits
+        o = hl.fits_send(C(), fs, "S", ["a"], ["b"])
+        self.assertEqual((o.ok, o.handshake, o.log, o.reason), (True, "OK", "OK", ""))
+        o = hl.fits_send(C(hs=False), fs, "S", ["a"], ["b"])
+        self.assertEqual((o.ok, o.handshake, o.log, o.reason), (False, "NG", "", "FITS_HANDSHAKE"))
+        o = hl.fits_send(C(lg=False), fs, "S", ["a"], ["b"])
+        self.assertEqual((o.handshake, o.log, o.reason), ("OK", "NG", "FITS_LOG"))
+        o = hl.fits_send(C(err="hs"), fs, "S", ["a"], ["b"])
+        self.assertEqual((o.handshake, o.log, o.reason), ("ERROR", "", "FITS_ERROR"))
+        c = C(err="log")
+        o = hl.fits_send(c, fs, "S", ["a"], ["b"], skip_handshake=True)
+        self.assertEqual((o.handshake, o.log, o.reason, c.calls), ("OK", "ERROR", "FITS_ERROR", ["log"]))
+
+    def test_pending_finish_and_retry_rules(self):
+        with hl.open_store(self.app) as s:
+            hl.generate(self.app, "ceramic_box", 2, "WO1", now=self.day1, store=s)
+            r = hl.verify(s, "CB26110001", "E", "A", "WO1", now=self.day1, pending=True)
+            self.assertTrue(r.pending and not r.ok)
+            self.assertEqual(s.verification(r.id)["result"], "PENDING")
+            # PENDING ยังไม่นับว่าผ่าน -> ไม่ซ้ำ
+            self.assertIsNone(s.first_pass("CB26110001"))
+            hl.finish_fits(s, r.id, hl.FitsOutcome(False, "OK", "ERROR", "down", "FITS_ERROR"))
+            row, skip = hl.retry_check(s, r.id)
+            self.assertTrue(skip)
+            # สแกนใหม่แล้วผ่าน -> แถวเก่าส่งซ้ำไม่ได้แล้ว
+            r2 = hl.verify(s, "CB26110001", "E", "A", "WO1", now=self.day1)
+            self.assertTrue(r2.ok)
+            with self.assertRaises(ValueError):
+                hl.retry_check(s, r.id)
+            with self.assertRaises(ValueError):
+                hl.retry_check(s, r2.id)        # ไม่ได้ FAIL เพราะ FITS
+
+    def test_test_mode_rules(self):
+        with hl.open_store(self.app) as s:
+            hl.generate(self.app, "ceramic_box", 1, "WO1", now=self.day1, store=s)
+            r = hl.verify(s, "cb26110001", "E", "A", "WO1", now=self.day1, test=True)
+            self.assertEqual((r.ok, r.serial, r.test), (True, "CB26110001_test", True))
+            r = hl.verify(s, "CB26110001_TEST", "E", "A", "WO1", now=self.day1, test=True)
+            self.assertEqual(r.serial, "CB26110001_test")      # ไม่เติมซ้ำ
+            self.assertTrue(hl.verify(s, "CB26110001", "E", "A", "WO1", now=self.day1).ok)  # test ไม่นับ
+            r = hl.verify(s, "CB26110001_test", "E", "A", "WO1", now=self.day1)
+            self.assertEqual(r.reason, "TEST_SERIAL")
+            self.assertEqual(hl.verify(s, "CB26119999", "E", "A", "WO1", test=True).reason, "NOT_FOUND")
+
+
 class StoreTest(unittest.TestCase):
     def test_migrates_old_verifications_table(self):
         import sqlite3

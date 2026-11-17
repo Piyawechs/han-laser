@@ -11,6 +11,16 @@
   "shifts": ["A", "B", "C"],
   "workorders": ["WO-TEST-001"],
   "iqr_codes": ["IQR-TEST-01"],
+  "workorder_pn": {"WO-TEST-001": "PN-TEST-001"},
+  "fits": {
+    "_comment": "model / operation / parameters ใส่ในหน้า Settings (ไม่เก็บค่าจริงใน repo) URL และรหัสอ่านจาก fits_env.bat",
+    "enabled": false,
+    "model": "",
+    "operation": "",
+    "parameters": [],
+    "fsp": ",",
+    "timeout": 20.0
+  },
 
   "products": {
     "ceramic_box": {

@@ -7,6 +7,10 @@ __pycache__/
 *.png
 *.env
 *.dmp
+
+# FITS credentials (FITS_URL / FITS_USER / FITS_PASSWORD ...): never commit
+fits_env.bat
+fits_config.ini
 dist/
 .venv/
 template/

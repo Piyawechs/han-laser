@@ -18,6 +18,28 @@ except ImportError:  # pragma: no cover
     QApplication = None
 
 
+class FakeFits:
+    """แทน fits_client.FitsClient"""
+
+    class R:
+        def __init__(self, ok, message):
+            self.ok, self.message = ok, message
+
+    def __init__(self, handshake_ok=True, log_ok=True, log_error=False):
+        self.handshake_ok, self.log_ok, self.log_error = handshake_ok, log_ok, log_error
+        self.calls = []
+
+    def handshake(self, model, operation, serial):
+        self.calls.append(("handshake", model, operation, serial))
+        return self.R(self.handshake_ok, "OK" if self.handshake_ok else "Wrong route")
+
+    def log(self, model, operation, names, values, fsp=","):
+        self.calls.append(("log", model, operation, list(names), list(values)))
+        if self.log_error:
+            raise OSError("network down")
+        return self.R(self.log_ok, "logged")
+
+
 @unittest.skipIf(QApplication is None, "PySide6 not installed")
 class UISmokeTest(unittest.TestCase):
     @classmethod
@@ -152,9 +174,118 @@ class UISmokeTest(unittest.TestCase):
         self.assertEqual((v.session_pass, v.session_fail), (2, 2))
         self.assertEqual(v.table.rowCount(), 4)
         self.assertEqual(v.table.item(1, 2).text(), "FAIL")
-        self.assertEqual(v.table.item(0, 4).text(), "IQR-TEST-01")
+        self.assertEqual(v.table.item(0, 5).text(), "IQR-TEST-01")
         self.assertEqual(v.scan.text(), "")              # เคลียร์รอสแกนต่อ
         self.assertIn("ผ่านแล้ว <b>2</b> / generate 3", v.stat_wo.text())
+
+    # ---------------- FITS
+    def _fits_setup(self, fake):
+        import han_laser as hl
+        app = self.win.app
+        app.fits = hl.FitsSettings(enabled=True, model="M", operation="OP",
+                                   parameters=[["SN", "serial"], ["WO", "workorder"], ["PN", "wo_pn"],
+                                               ["IQR", "iqr"], ["Result", "result"], ["FC", "failure_code"]])
+        app.workorder_pn = {"WO-TEST-001": "PN-1"}
+        self.calls = []
+        self.win.fits_factory = lambda test: (self.calls.append(("client", test)), fake)[1]
+        hl.generate(app, "ceramic_box", 3, "WO-TEST-001", store=self.win.store)
+        v = self.win.verify_tab
+        v.reload()
+        for combo, val in ((v.en, "EN001"), (v.shift, "A"), (v.workorder, "WO-TEST-001"),
+                           (v.iqr, "IQR-TEST-01")):
+            combo.setCurrentIndex(combo.findData(val))
+        self.first = hl.preview(app, "ceramic_box", 1, store=self.win.store)[0][:-4] + "0001"
+        return v
+
+    def _scan(self, v, code):
+        from PySide6.QtCore import QThreadPool
+        v.scan.setText(code)
+        v.do_verify()
+        QThreadPool.globalInstance().waitForDone(5000)
+        for _ in range(5):
+            self.qapp.processEvents()
+
+    def test_fits_pass_sends_handshake_then_log(self):
+        fake = FakeFits()
+        v = self._fits_setup(fake)
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            self._scan(v, self.first)
+        self.assertEqual(v.result_word.text(), "PASS")
+        self.assertEqual([c[0] for c in fake.calls], ["handshake", "log"])
+        self.assertEqual(fake.calls[0][1:], ("M", "OP", self.first))
+        self.assertEqual(fake.calls[1][3], ["SN", "WO", "PN", "IQR", "Result", "FC"])
+        self.assertEqual(fake.calls[1][4], [self.first, "WO-TEST-001", "PN-1", "IQR-TEST-01", "PASS", ""])
+        row = self.win.store.list_verifications()[0]
+        self.assertEqual((row["result"], row["fits_handshake"], row["fits_log"]), ("PASS", "OK", "OK"))
+        self.assertEqual(self.calls, [("client", False)])
+
+    def test_fits_handshake_refused(self):
+        fake = FakeFits(handshake_ok=False)
+        v = self._fits_setup(fake)
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            self._scan(v, self.first)
+        self.assertEqual(v.result_word.text(), "FAIL")
+        self.assertIn("Handshake", v.result_msg.text())
+        self.assertEqual([c[0] for c in fake.calls], ["handshake"])
+        self.assertEqual(self.win.store.list_verifications()[0]["reason"], "FITS_HANDSHAKE")
+
+    def test_fits_network_error_then_retry(self):
+        fake = FakeFits(log_error=True)
+        v = self._fits_setup(fake)
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            self._scan(v, self.first)
+            self.assertEqual(v.result_word.text(), "FAIL")
+            self.assertTrue(v.retry_btn.isVisibleTo(v))
+            row = self.win.store.list_verifications()[0]
+            self.assertEqual((row["reason"], row["fits_handshake"], row["fits_log"]),
+                             ("FITS_ERROR", "OK", "ERROR"))
+            fake.log_error = False
+            from PySide6.QtCore import QThreadPool
+            v.retry_btn.click()
+            QThreadPool.globalInstance().waitForDone(5000)
+            for _ in range(5):
+                self.qapp.processEvents()
+        self.assertEqual(v.result_word.text(), "PASS")
+        # retry ข้าม handshake (ผ่านแล้ว) ส่งแค่ log
+        self.assertEqual([c[0] for c in fake.calls], ["handshake", "log", "log"])
+        rows = self.win.store.list_verifications()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["result"], "PASS")
+
+    def test_engineer_mode_adds_test_suffix_and_uses_test_endpoint(self):
+        import han_laser as hl
+        fake = FakeFits()
+        v = self._fits_setup(fake)
+        self.win.app.engineer_password = hl.hash_password("1234")
+        from ui import main_window as mw
+        with mock.patch.object(mw.UnlockDialog, "exec", return_value=True):
+            v.mode.setCurrentIndex(1)
+        self.assertTrue(v.test_mode)
+        self.assertTrue(v.banner.isVisibleTo(v))
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            self._scan(v, self.first)
+            self._scan(v, self.first)                # test ซ้ำได้
+        self.assertEqual(v.result_word.text(), "PASS (TEST)")
+        self.assertEqual(fake.calls[0][3], self.first + "_test")
+        self.assertEqual(self.calls, [("client", True), ("client", True)])
+        rows = self.win.store.list_verifications()
+        self.assertTrue(all(r["test"] == 1 for r in rows))
+        self.assertEqual(self.win.store.workorder_stats("WO-TEST-001")["passed"], 0)
+        # ออกจาก engineer -> กลับ operator และ _test ถูกปฏิเสธ
+        self.win.lock()
+        self.assertFalse(v.test_mode)
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            self._scan(v, self.first + "_test")
+        self.assertEqual(self.win.store.list_verifications()[0]["reason"], "TEST_SERIAL")
+
+    def test_engineer_mode_wrong_password_stays_operator(self):
+        import han_laser as hl
+        self.win.app.engineer_password = hl.hash_password("1234")
+        from ui import main_window as mw
+        v = self.win.verify_tab
+        with mock.patch.object(mw.UnlockDialog, "exec", return_value=False):
+            v.mode.setCurrentIndex(1)
+        self.assertFalse(v.test_mode)
 
     def test_screenshot(self):
         self.win.resize(1100, 680)

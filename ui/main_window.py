@@ -275,6 +275,8 @@ class MainWindow(QMainWindow):
         self.config_path = Path(config_path)
         self.app = hl.AppConfig.load(self.config_path)
         self.store = Store(self.app.abspath(self.app.db_file))
+        # สร้าง FITS client (test=True -> TEST endpoint) เปลี่ยนได้ในเทสต์
+        self.fits_factory = lambda test: hl.make_fits_client(self.app, test)
         self.setWindowTitle("han-laser  ·  Serial generator for Han's Laser Marking")
         self.resize(1100, 680)
 
@@ -328,6 +330,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(self.tabs.indexOf(self.settings_stack), "Settings (ล็อก)")
         self.mode_lbl.setText("Operator")
         self.lock_btn.hide()
+        self.verify_tab.set_operator_mode()
 
     def unlock(self) -> bool:
         if not self.app.engineer_password:

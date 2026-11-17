@@ -1,19 +1,24 @@
-"""หน้า Verify: สแกน serial หลังมาร์ก ตรวจกับ DB และเก็บประวัติ"""
+"""หน้า Verify: สแกน serial หลังมาร์ก ตรวจกับ DB แล้ว handshake + log ไป FITS และเก็บประวัติ"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 import han_laser as hl
 from ui.common import error
 
 PLACEHOLDER = "— เลือก —"
-GREEN, RED, GREY = "#15803d", "#b91c1c", "#6b7280"
-REASON_TH = {"NOT_FOUND": "ไม่พบในระบบ", "WRONG_WORKORDER": "ผิด Workorder", "DUPLICATE": "ซ้ำ", "": ""}
+GREEN, RED, GREY, BLUE, ORANGE = "#15803d", "#b91c1c", "#6b7280", "#1d4ed8", "#c2410c"
+REASON_TH = {
+    "": "", "NOT_FOUND": "ไม่พบในระบบ", "WRONG_WORKORDER": "ผิด Workorder", "DUPLICATE": "ซ้ำ",
+    "TEST_SERIAL": "SN _test (Operator)", "FITS_HANDSHAKE": "FITS handshake ไม่ผ่าน",
+    "FITS_LOG": "FITS log ไม่ผ่าน", "FITS_ERROR": "ติดต่อ FITS ไม่ได้",
+}
+MODE_OPERATOR, MODE_ENGINEER = 0, 1
 
 
 def big_font(size: int, bold: bool = True) -> QFont:
@@ -23,16 +28,50 @@ def big_font(size: int, bold: bool = True) -> QFont:
     return f
 
 
+class _JobSignals(QObject):
+    done = Signal(int, object)      # verification id, FitsOutcome
+
+
+class FitsJob(QRunnable):
+    """ส่ง FITS ใน thread แยก (UI ไม่ค้างระหว่างรอ) ไม่แตะ DB"""
+
+    def __init__(self, vid, client, fs, serial, names, values, skip_handshake):
+        super().__init__()
+        self.vid, self.client, self.fs = vid, client, fs
+        self.serial, self.names, self.values, self.skip = serial, names, values, skip_handshake
+        self.signals = _JobSignals()
+
+    def run(self):
+        out = hl.fits_send(self.client, self.fs, self.serial, self.names, self.values, self.skip)
+        self.signals.done.emit(self.vid, out)
+
+
 class VerifyTab(QWidget):
     verified = Signal()
-    COLS = ["เวลา", "Serial", "ผล", "สาเหตุ", "iQR", "EN", "Shift", "Workorder"]
+    COLS = ["เวลา", "Serial", "ผล", "สาเหตุ", "FITS", "iQR", "EN", "Shift", "Workorder"]
 
     def __init__(self, win):
         super().__init__()
         self.win = win
         self.session_pass = self.session_fail = 0
+        self.busy = False
+        self.last_fail_vid: int | None = None   # รายการล่าสุดที่ FAIL เพราะ FITS (ปุ่มส่งซ้ำ)
+        self._jobs = []                         # กัน signals ถูกเก็บกวาดก่อนเวลา
+        self.pool = QThreadPool.globalInstance()
 
-        # ---- เลือก EN / Shift / Workorder
+        # ---- โหมด
+        self.mode = QComboBox()
+        self.mode.addItem("Operator", MODE_OPERATOR)
+        self.mode.addItem("Engineer (TEST)", MODE_ENGINEER)
+        self.mode.setMinimumHeight(32)
+        self.mode.setFont(big_font(12, False))
+        self.banner = QLabel("ENGINEER TEST MODE: SN จะเติม _test ให้อัตโนมัติ และส่งไป FITS TEST endpoint")
+        self.banner.setStyleSheet(f"background: {ORANGE}; color: white; padding: 6px; border-radius: 6px;")
+        self.banner.setFont(big_font(11))
+        self.banner.setAlignment(Qt.AlignCenter)
+        self.banner.hide()
+
+        # ---- เลือก EN / Shift / Workorder / iQR
         self.en = QComboBox()
         self.shift = QComboBox()
         self.workorder = QComboBox()
@@ -48,6 +87,10 @@ class VerifyTab(QWidget):
             lbl.setFont(big_font(12))
             sel.addWidget(lbl, i // 2, (i % 2) * 2)
             sel.addWidget(w, i // 2, (i % 2) * 2 + 1)
+        mlbl = QLabel("โหมด")
+        mlbl.setFont(big_font(12))
+        sel.addWidget(mlbl, 2, 0)
+        sel.addWidget(self.mode, 2, 1)
         sel.setColumnStretch(1, 1)
         sel.setColumnStretch(3, 1)
 
@@ -73,9 +116,16 @@ class VerifyTab(QWidget):
         self.result_msg.setFont(big_font(12, False))
         self.result_msg.setAlignment(Qt.AlignCenter)
         self.result_msg.setWordWrap(True)
+        self.retry_btn = QPushButton("ส่ง FITS ซ้ำ")
+        self.retry_btn.setMinimumHeight(40)
+        self.retry_btn.setFont(big_font(12))
+        self.retry_btn.setStyleSheet("QPushButton { background: white; color: #b91c1c; border-radius: 6px;"
+                                     " padding: 4px 24px; }")
+        self.retry_btn.hide()
         rl = QVBoxLayout(self.result_box)
         for w in (self.result_word, self.result_serial, self.result_msg):
             rl.addWidget(w)
+        rl.addWidget(self.retry_btn, 0, Qt.AlignHCenter)
 
         # ---- ตัวนับ
         self.stat_wo = QLabel()
@@ -91,12 +141,15 @@ class VerifyTab(QWidget):
         self.table.setHorizontalHeaderLabels(self.COLS)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setFocusPolicy(Qt.NoFocus)              # ไม่แย่ง focus จากช่องสแกน
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
+        hint = QLabel("ประวัติการ verify ล่าสุด (Workorder ที่เลือก) · ดับเบิลคลิกแถวที่ FAIL เพราะ FITS เพื่อส่งซ้ำ")
 
         lay = QVBoxLayout(self)
+        lay.addWidget(self.banner)
         lay.addLayout(sel)
         lay.addSpacing(6)
         scan_lbl = QLabel("Serial (สแกน code บนชิ้นงาน)")
@@ -106,15 +159,18 @@ class VerifyTab(QWidget):
         lay.addWidget(self.scan_hint)
         lay.addWidget(self.result_box)
         lay.addLayout(stats)
-        lay.addWidget(QLabel("ประวัติการ verify ล่าสุด (Workorder ที่เลือก)"))
+        lay.addWidget(hint)
         lay.addWidget(self.table, 1)
 
         for c in (self.en, self.shift, self.workorder, self.iqr):
             c.currentIndexChanged.connect(self._selection_changed)
+        self.mode.currentIndexChanged.connect(self._mode_changed)
         self.scan.returnPressed.connect(self.do_verify)
+        self.retry_btn.clicked.connect(lambda: self.retry(self.last_fail_vid))
+        self.table.cellDoubleClicked.connect(self._row_double_clicked)
         self._show_idle()
 
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------ state
     def reload(self) -> None:
         app = self.win.app
         for combo, items in ((self.en, app.operators), (self.shift, app.shifts),
@@ -130,6 +186,27 @@ class VerifyTab(QWidget):
             combo.blockSignals(False)
         self._selection_changed()
 
+    @property
+    def test_mode(self) -> bool:
+        return self.mode.currentData() == MODE_ENGINEER
+
+    def set_operator_mode(self) -> None:
+        """เรียกตอนออกจาก Engineer mode"""
+        self.mode.blockSignals(True)
+        self.mode.setCurrentIndex(MODE_OPERATOR)
+        self.mode.blockSignals(False)
+        self._apply_mode()
+
+    def _mode_changed(self) -> None:
+        if self.test_mode and not self.win.engineer and not self.win.unlock():
+            self.set_operator_mode()          # ใส่รหัสไม่ผ่าน กลับเป็น Operator
+            return
+        self._apply_mode()
+
+    def _apply_mode(self) -> None:
+        self.banner.setVisible(self.test_mode)
+        self._selection_changed()
+
     def selection(self) -> tuple[str | None, str | None, str | None, str | None]:
         return (self.en.currentData(), self.shift.currentData(), self.workorder.currentData(),
                 self.iqr.currentData())
@@ -138,11 +215,14 @@ class VerifyTab(QWidget):
         return all(self.selection())
 
     def _selection_changed(self) -> None:
-        ok = self.ready()
+        ok = self.ready() and not self.busy
         self.scan.setEnabled(ok)
-        if ok:
-            self.scan.setPlaceholderText("สแกน QR code ที่นี่")
-            self.scan_hint.setText("สแกนแล้วระบบตรวจทันที (เครื่องสแกนกด Enter ให้เอง)")
+        if self.busy:
+            self.scan.setPlaceholderText("กำลังส่ง FITS…")
+        elif ok:
+            self.scan.setPlaceholderText("สแกน QR code ที่นี่" + ("  (จะเติม _test)" if self.test_mode else ""))
+            fits = "แล้ว handshake + log ไป FITS" if self.win.app.fits.enabled else "(ปิดการส่ง FITS อยู่)"
+            self.scan_hint.setText(f"สแกนแล้วระบบตรวจทันที {fits}")
             self.focus_scan()
         else:
             missing = [n for n, v in zip(("EN", "Shift", "Workorder", "iQR code"), self.selection()) if not v]
@@ -154,47 +234,115 @@ class VerifyTab(QWidget):
                 self.scan_hint.setText("")
         self.refresh()
 
+    def _set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        self.mode.setEnabled(not busy)
+        self.retry_btn.setEnabled(not busy)
+        self._selection_changed()
+
     def focus_scan(self) -> None:
         if self.scan.isEnabled():
             QTimer.singleShot(0, self.scan.setFocus)
 
-    def _show_idle(self) -> None:
-        self.result_box.setStyleSheet(f"QFrame {{ background: #f3f4f6; border-radius: 10px; }}")
-        self.result_word.setText("READY")
-        self.result_word.setStyleSheet(f"color: {GREY};")
-        self.result_serial.setText("")
-        self.result_msg.setText("")
-
-    def _show_result(self, r: hl.VerifyResult) -> None:
-        color = GREEN if r.ok else RED
+    # ------------------------------------------------------------ result box
+    def _paint(self, color: str, word: str, serial: str, msg: str, retry: bool = False) -> None:
         self.result_box.setStyleSheet(f"QFrame {{ background: {color}; border-radius: 10px; }}")
+        fg = GREY if color == "#f3f4f6" else "white"
         for w in (self.result_word, self.result_serial, self.result_msg):
-            w.setStyleSheet("color: white;")
-        self.result_word.setText("PASS" if r.ok else "FAIL")
-        self.result_serial.setText(r.serial)
-        self.result_msg.setText(r.message)
+            w.setStyleSheet(f"color: {fg};")
+        self.result_word.setText(word)
+        self.result_serial.setText(serial)
+        self.result_msg.setText(msg)
+        self.retry_btn.setVisible(retry)
 
-    def do_verify(self) -> None:
-        raw = self.scan.text()
-        self.scan.clear()
-        if not self.ready() or not raw.strip():
-            return self.focus_scan()
-        en, shift, wo, iqr = self.selection()
-        try:
-            r = hl.verify(self.win.store, raw, en, shift, wo, iqr=iqr)
-        except (ValueError, OSError) as e:
-            error(self, f"บันทึกผลไม่ได้\n\n{e}")
-            return self.focus_scan()
-        if r.ok:
+    def _show_idle(self) -> None:
+        self._paint("#f3f4f6", "READY", "", "")
+
+    def _show_final(self, ok: bool, serial: str, msg: str, test: bool, retry: bool = False) -> None:
+        word = ("PASS" if ok else "FAIL") + (" (TEST)" if test else "")
+        self._paint(GREEN if ok else RED, word, serial, msg, retry)
+        if ok:
             self.session_pass += 1
         else:
             self.session_fail += 1
             QApplication.beep()
-        self._show_result(r)
+
+    # ------------------------------------------------------------ verify + FITS
+    def do_verify(self) -> None:
+        raw = self.scan.text()
+        self.scan.clear()
+        if self.busy or not self.ready() or not raw.strip():
+            return self.focus_scan()
+        en, shift, wo, iqr = self.selection()
+        app, test = self.win.app, self.test_mode
+        client = None
+        if app.fits.enabled:
+            try:
+                client = self.win.fits_factory(test)
+            except hl.FitsSetupError as e:     # ตั้งค่าไม่ครบ ยังไม่บันทึกอะไร
+                self._show_final(False, hl.normalize_code(raw), str(e), test)
+                return self.focus_scan()
+        try:
+            r = hl.verify(self.win.store, raw, en, shift, wo, iqr=iqr, test=test, pending=client is not None)
+        except (ValueError, OSError) as e:
+            error(self, f"บันทึกผลไม่ได้\n\n{e}")
+            return self.focus_scan()
+        if not r.pending:
+            self._show_final(r.ok, r.serial, r.message, r.test)
+            self._after()
+            return
+        self._start_fits(r.id, client, skip_handshake=False)
+
+    def _start_fits(self, vid: int, client, skip_handshake: bool) -> None:
+        store, app = self.win.store, self.win.app
+        row = store.verification(vid)
+        try:
+            names, values = hl.fits_log_values(app, hl.fits_context(row))
+        except hl.FitsSetupError as e:
+            out = hl.FitsOutcome(False, row["fits_handshake"], "", str(e), "FITS_ERROR")
+            return self._fits_done(vid, out)
+        self._paint(BLUE, "กำลังส่ง FITS…", row["serial"],
+                    "ตรวจในเครื่องผ่านแล้ว รอ " + ("log" if skip_handshake else "handshake + log"))
+        self._set_busy(True)
+        job = FitsJob(vid, client, app.fits, row["serial"], names, values, skip_handshake)
+        job.signals.done.connect(self._fits_done)
+        self._jobs.append(job)
+        self.pool.start(job)
+
+    def _fits_done(self, vid: int, out: hl.FitsOutcome) -> None:
+        self._jobs = [j for j in self._jobs if j.vid != vid]
+        try:
+            hl.finish_fits(self.win.store, vid, out)
+        except (ValueError, OSError) as e:
+            error(self, f"บันทึกผล FITS ไม่ได้\n\n{e}")
+        row = self.win.store.verification(vid)
+        self.last_fail_vid = None if out.ok else vid
+        self._set_busy(False)
+        self._show_final(out.ok, row["serial"], out.message, bool(row["test"]), retry=not out.ok)
+        self._after()
+
+    def retry(self, vid: int | None) -> None:
+        if vid is None or self.busy:
+            return
+        try:
+            row, skip = hl.retry_check(self.win.store, vid)
+            client = self.win.fits_factory(bool(row["test"]))
+        except ValueError as e:              # รวม FitsSetupError
+            error(self, str(e))
+            return self.focus_scan()
+        self._start_fits(vid, client, skip_handshake=skip)
+
+    def _row_double_clicked(self, r: int, _c: int) -> None:
+        item = self.table.item(r, 0)
+        if item is not None:
+            self.retry(item.data(Qt.UserRole))
+
+    def _after(self) -> None:
         self.refresh()
         self.verified.emit()
         self.focus_scan()
 
+    # ------------------------------------------------------------ table
     def refresh(self) -> None:
         wo = self.workorder.currentData()
         store = self.win.store
@@ -209,12 +357,21 @@ class VerifyTab(QWidget):
         rows = store.list_verifications(wo) if wo else []
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            vals = [row["scanned_at"].replace("T", " "), row["serial"], row["result"],
-                    REASON_TH.get(row["reason"], row["reason"]), row["iqr"], row["en"], row["shift"],
+            fits = ""
+            if row["fits_handshake"] or row["fits_log"]:
+                fits = f"HS {row['fits_handshake'] or '-'} · LOG {row['fits_log'] or '-'}"
+            result = row["result"] + (" TEST" if row["test"] else "")
+            vals = [row["scanned_at"].replace("T", " "), row["serial"], result,
+                    REASON_TH.get(row["reason"], row["reason"]), fits, row["iqr"], row["en"], row["shift"],
                     row["workorder"]]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v)
+                if c == 0:
+                    item.setData(Qt.UserRole, row["id"])
                 if c == 2:
                     item.setForeground(Qt.white)
-                    item.setBackground(Qt.darkGreen if v == "PASS" else Qt.darkRed)
+                    bg = {"PASS": Qt.darkGreen, "PENDING": QColor(BLUE)}.get(row["result"], Qt.darkRed)
+                    item.setBackground(bg)
+                if c == 4 and row["fits_message"]:
+                    item.setToolTip(row["fits_message"])
                 self.table.setItem(r, c, item)

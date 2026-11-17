@@ -87,6 +87,53 @@ class Product:
         return now.strftime(PERIOD_FORMATS[self.seq_reset])
 
 
+# ค่าที่ map เข้า parameter ของ FITS log ได้
+FITS_SOURCES = {
+    "serial": "Serial (โหมด Engineer มี _test ต่อท้าย)",
+    "workorder": "Workorder",
+    "wo_pn": "WO PN (ตั้งคู่กับ Workorder ใน Settings)",
+    "iqr": "iQR code",
+    "result": "ผล (PASS)",
+    "failure_code": "Failure code (ว่างเมื่อ PASS)",
+    "en": "EN",
+    "shift": "Shift",
+    "product": "Product id",
+    "blank": "ค่าว่าง",
+}
+
+
+@dataclass
+class FitsSettings:
+    """ค่าการส่ง FITS (URL/รหัสไม่อยู่ที่นี่ อ่านจาก environment FITS_* ตอนส่ง)"""
+    enabled: bool = False
+    model: str = ""
+    operation: str = ""
+    parameters: list = field(default_factory=list)   # [["<parameter name>", "<source>"], ...]
+    fsp: str = ","
+    timeout: float = 20.0
+
+    def validate(self) -> None:
+        if self.fsp not in (",", ";", ":", "|"):
+            raise ValueError("FITS: ตัวคั่น (fsp) ต้องเป็น , ; : หรือ |")
+        if not (isinstance(self.timeout, (int, float)) and 1 <= self.timeout <= 120):
+            raise ValueError("FITS: timeout ต้องอยู่ระหว่าง 1-120 วินาที")
+        if not isinstance(self.parameters, list):
+            raise ValueError("FITS: parameters ต้องเป็นรายการ")
+        for item in self.parameters:
+            if not (isinstance(item, (list, tuple)) and len(item) == 2 and all(isinstance(x, str) for x in item)):
+                raise ValueError(f"FITS: parameter ต้องเป็นคู่ [ชื่อ, ค่า] ได้ {item!r}")
+            name, src = item
+            if not name.strip() or self.fsp in name:
+                raise ValueError(f"FITS: ชื่อ parameter '{name}' ว่างหรือมีตัวคั่น '{self.fsp}'")
+            if src not in FITS_SOURCES:
+                raise ValueError(f"FITS: parameter '{name}' ใช้ค่า '{src}' ไม่ได้ (ใช้ได้: {', '.join(FITS_SOURCES)})")
+        if self.enabled:
+            if not self.model.strip() or not self.operation.strip():
+                raise ValueError("FITS: เปิดใช้แล้วต้องระบุ model และ operation")
+            if not self.parameters:
+                raise ValueError("FITS: เปิดใช้แล้วต้องมี parameter อย่างน้อย 1 ตัว")
+
+
 @dataclass
 class AppConfig:
     products: dict = field(default_factory=dict)     # id -> Product
@@ -100,6 +147,8 @@ class AppConfig:
     shifts: list = field(default_factory=lambda: ["A", "B", "C"])
     workorders: list = field(default_factory=list)         # = Lot ตอน Generate
     iqr_codes: list = field(default_factory=list)          # iQR ให้เลือกในหน้า Verify (บันทึกคู่กับ serial)
+    workorder_pn: dict = field(default_factory=dict)       # Workorder -> WO PN (ส่ง FITS)
+    fits: FitsSettings = field(default_factory=FitsSettings)
     path: Path | None = field(default=None, repr=False, compare=False)
 
     # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
@@ -126,6 +175,10 @@ class AppConfig:
             v = getattr(self, name)
             if not isinstance(v, list) or not all(isinstance(x, str) and x.strip() for x in v):
                 raise ValueError(f"{name} ต้องเป็นรายการข้อความ (ไม่ว่าง)")
+        if not (isinstance(self.workorder_pn, dict)
+                and all(isinstance(k, str) and isinstance(v, str) for k, v in self.workorder_pn.items())):
+            raise ValueError("workorder_pn ต้องเป็น {workorder: pn}")
+        self.fits.validate()
         txts = [str(self.abspath(p.serial_txt)).lower() for p in self.products.values()]
         if len(set(txts)) != len(txts):
             raise ValueError("แต่ละ product ต้องใช้ไฟล์ serial_txt คนละไฟล์")
@@ -143,7 +196,8 @@ class AppConfig:
             praw = _check_keys(Product, dict(praw), f"product '{pid}'")
             praw.setdefault("id", pid)
             products[pid] = Product(**praw)
-        cfg = cls(products=products, path=path, **raw)
+        fits = FitsSettings(**_check_keys(FitsSettings, dict(raw.pop("fits", None) or {}), "fits"))
+        cfg = cls(products=products, fits=fits, path=path, **raw)
         cfg.validate()
         return cfg
 
@@ -154,7 +208,8 @@ class AppConfig:
             return cls.from_dict(json.load(f), path)
 
     def to_dict(self) -> dict:
-        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("products", "path")}
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("products", "path", "fits")}
+        d["fits"] = asdict(self.fits)
         d["products"] = {pid: {k: v for k, v in asdict(p).items() if k != "id"}
                          for pid, p in self.products.items()}
         return d
@@ -336,11 +391,16 @@ def is_running(image_name: str) -> bool:
 @dataclass
 class VerifyResult:
     ok: bool
-    serial: str
-    reason: str          # '' | EMPTY | NOT_FOUND | WRONG_WORKORDER | DUPLICATE
+    serial: str          # serial ที่บันทึก/ส่ง FITS (โหมด test มี _test ต่อท้าย)
+    reason: str          # '' | EMPTY | NOT_FOUND | WRONG_WORKORDER | DUPLICATE | TEST_SERIAL
     message: str
     product: str = ""
     id: int | None = None
+    pending: bool = False   # ผ่านในเครื่องแล้ว รอผล FITS
+    test: bool = False
+
+
+TEST_SUFFIX = "_test"
 
 
 def normalize_code(raw: str) -> str:
@@ -349,34 +409,169 @@ def normalize_code(raw: str) -> str:
 
 
 def verify(store: Store, raw_code: str, en: str, shift: str, workorder: str,
-           now: datetime | None = None, iqr: str = "") -> VerifyResult:
+           now: datetime | None = None, iqr: str = "", test: bool = False,
+           pending: bool = False) -> VerifyResult:
     """ตรวจ serial หลังมาร์ก: ต้องเคย generate, อยู่ใน workorder ที่เลือก และยังไม่เคย PASS
-    บันทึกทุกครั้ง (ทั้ง PASS และ FAIL) ยกเว้นค่าว่าง"""
+    บันทึกทุกครั้ง (ทั้ง PASS และ FAIL) ยกเว้นค่าว่าง
+
+    test=True (โหมด Engineer): ต่อ _test ท้าย serial ให้เอง ไม่เช็กซ้ำ และไม่นับเป็นของจริง
+    pending=True: ผ่านในเครื่องแล้วบันทึกเป็น PENDING รอ finish_fits() หลังส่ง FITS
+    """
     if not (en and shift and workorder):
         raise ValueError("เลือก EN, Shift และ Workorder ก่อนสแกน")
-    serial = normalize_code(raw_code)
-    if not serial:
+    code = normalize_code(raw_code)
+    if not code:
         return VerifyResult(False, "", "EMPTY", "ไม่มีข้อมูลจากการสแกน")
+    suffix = TEST_SUFFIX.upper()
+    base = code[:-len(suffix)] if code.endswith(suffix) else code
+    serial = base + TEST_SUFFIX if test else code
     now = now or datetime.now()
     stamp = now.isoformat(timespec="seconds")
     with store.transaction():
-        info = store.serial_info(serial)
+        info = store.serial_info(base)
         product = info["product"] if info else ""
-        if info is None:
-            reason, msg = "NOT_FOUND", "ไม่พบ serial นี้ในระบบ (ไม่เคย generate)"
+        if not test and code.endswith(suffix):
+            reason, msg = "TEST_SERIAL", "SN ที่ลงท้าย _test ใช้ได้เฉพาะโหมด Engineer"
+        elif info is None:
+            reason, msg = "NOT_FOUND", f"ไม่พบ serial {base} ในระบบ (ไม่เคย generate)"
         elif info["lot"] != workorder:
             reason, msg = "WRONG_WORKORDER", f"serial นี้อยู่ใน Workorder {info['lot'] or '-'} ไม่ใช่ {workorder}"
         else:
-            prev = store.first_pass(serial)
+            prev = None if test else store.first_pass(base)
             if prev is not None:
                 reason = "DUPLICATE"
                 msg = f"serial นี้ verify ผ่านไปแล้วเมื่อ {prev['scanned_at'].replace('T', ' ')} (EN {prev['en']})"
             else:
                 reason, msg = "", "ถูกต้อง"
         ok = reason == ""
+        result = ("PENDING" if pending else "PASS") if ok else "FAIL"
         vid = store.add_verification(stamp, raw_code, serial, product, en, shift, workorder,
-                                     "PASS" if ok else "FAIL", reason, iqr)
-    return VerifyResult(ok, serial, reason, msg, product, vid)
+                                     result, reason, iqr, test)
+    return VerifyResult(ok and not pending, serial, reason, msg, product, vid, ok and pending, test)
+
+
+# ---------------------------------------------------------------- FITS (ผ่าน wheel fabrinet_fits_client)
+
+class FitsSetupError(ValueError):
+    """ตั้งค่า FITS ไม่ครบ (ยังไม่ส่งอะไรออกไป)"""
+
+
+FITS_ENV = {"url": "FITS_URL", "project_id": "FITS_PROJECT_ID", "user_name": "FITS_USER",
+            "user_password": "FITS_PASSWORD", "revision": "FITS_REVISION"}
+
+
+def fits_env_status(test: bool = False, environ=None) -> list[tuple[str, bool]]:
+    """ตัวแปร FITS_* ตัวไหนตั้งแล้ว (ไม่คืนค่าจริง) ใช้แสดงในหน้า Settings
+    โหมด test: FITS_TEST_* ถ้ามีใช้ก่อน ไม่มีใช้ FITS_* ส่วน URL ไม่ตั้งได้ (ใช้ TEST endpoint ของ fits_client)"""
+    env = os.environ if environ is None else environ
+    out = []
+    for name in FITS_ENV.values():
+        tname = name.replace("FITS_", "FITS_TEST_")
+        if not test:
+            out.append((name, bool(env.get(name))))
+        elif name == "FITS_URL":
+            out.append((tname, True))
+        else:
+            out.append((tname if env.get(tname) else name, bool(env.get(tname) or env.get(name))))
+    return out
+
+
+def make_fits_client(app: AppConfig, test: bool = False, environ=None):
+    """สร้าง FitsClient จาก environment FITS_* (โหมด test ใช้ TEST endpoint)"""
+    try:
+        import fits_client
+    except ImportError:
+        raise FitsSetupError("ยังไม่ได้ติดตั้ง fabrinet_fits_client ใน .venv "
+                             "(.venv\\Scripts\\pip install fabrinet_fits_client-*.whl)") from None
+    env = os.environ if environ is None else environ
+    values = {}
+    for key, name in FITS_ENV.items():
+        values[key] = (env.get(name.replace("FITS_", "FITS_TEST_")) if test else None) or env.get(name, "")
+    if test and not env.get("FITS_TEST_URL"):
+        values["url"] = fits_client.TEST_URL
+    missing = [FITS_ENV[k] for k, v in values.items() if not v]
+    if missing:
+        raise FitsSetupError("ยังไม่ได้ตั้งค่า FITS: " + ", ".join(missing)
+                             + " (ใส่ใน fits_env.bat ข้าง start_ui.bat)")
+    cfg = fits_client.FitsConfig(timeout=float(app.fits.timeout), **values)
+    return fits_client.FitsClient(cfg)
+
+
+def fits_log_values(app: AppConfig, ctx: dict) -> tuple[list, list]:
+    """ชื่อ parameter และค่า ตามลำดับใน Settings ctx มี key ตาม FITS_SOURCES"""
+    fs = app.fits
+    names, values = [], []
+    for name, src in fs.parameters:
+        if src == "wo_pn":
+            val = app.workorder_pn.get(ctx.get("workorder", ""), "")
+            if not val:
+                raise FitsSetupError(f"ยังไม่ได้ตั้ง WO PN ของ Workorder {ctx.get('workorder')} (Settings)")
+        elif src == "blank":
+            val = ""
+        else:
+            val = str(ctx.get(src, ""))
+        if fs.fsp in val:
+            raise FitsSetupError(f"ค่าของ '{name}' มีตัวคั่น '{fs.fsp}' ส่ง FITS ไม่ได้: {val}")
+        names.append(name)
+        values.append(val)
+    return names, values
+
+
+def fits_context(row) -> dict:
+    """ค่าสำหรับ FITS log จากแถว verifications (ส่งเฉพาะชิ้นที่ผ่านในเครื่อง -> result PASS)"""
+    return {"serial": row["serial"], "workorder": row["workorder"], "iqr": row["iqr"], "en": row["en"],
+            "shift": row["shift"], "product": row["product"], "result": "PASS", "failure_code": ""}
+
+
+@dataclass
+class FitsOutcome:
+    ok: bool
+    handshake: str      # OK | NG | ERROR | '' (ข้าม)
+    log: str            # OK | NG | ERROR | ''
+    message: str
+    reason: str         # '' | FITS_HANDSHAKE | FITS_LOG | FITS_ERROR
+
+
+def fits_send(client, fs: FitsSettings, serial: str, names: list, values: list,
+              skip_handshake: bool = False) -> FitsOutcome:
+    """handshake แล้ว log (เรียกจาก thread แยกได้ ไม่แตะ DB)"""
+    hs = "OK" if skip_handshake else ""
+    stage = "log" if skip_handshake else "handshake"
+    try:
+        if not skip_handshake:
+            r = client.handshake(fs.model, fs.operation, serial)
+            if not r.ok:
+                return FitsOutcome(False, "NG", "", f"Handshake ไม่ผ่าน: {r.message or '-'}", "FITS_HANDSHAKE")
+            hs, stage = "OK", "log"
+        r = client.log(fs.model, fs.operation, names, values, fs.fsp)
+        if not r.ok:
+            return FitsOutcome(False, hs, "NG", f"Log ไม่ผ่าน: {r.message or '-'}", "FITS_LOG")
+        return FitsOutcome(True, hs, "OK", r.message or "ส่ง FITS สำเร็จ", "")
+    except Exception as e:  # noqa: BLE001  เน็ตล่ม / FITS ไม่ตอบ / SOAP fault -> FAIL + ส่งซ้ำได้
+        msg = f"ติดต่อ FITS ไม่ได้ ({stage}): {type(e).__name__}: {e}"
+        return FitsOutcome(False, "ERROR" if stage == "handshake" else hs,
+                           "ERROR" if stage == "log" else "", msg, "FITS_ERROR")
+
+
+def finish_fits(store: Store, vid: int, outcome: FitsOutcome) -> None:
+    with store.transaction():
+        store.finish_verification(vid, "PASS" if outcome.ok else "FAIL", outcome.reason,
+                                  outcome.handshake, outcome.log, outcome.message)
+
+
+def retry_check(store: Store, vid: int):
+    """แถวที่ส่ง FITS ซ้ำได้ คืน (row, skip_handshake) ไม่งั้น ValueError"""
+    row = store.verification(vid)
+    if row is None:
+        raise ValueError("ไม่พบรายการนี้")
+    if not (row["reason"].startswith("FITS_") or row["result"] == "PENDING"):
+        raise ValueError("ส่งซ้ำได้เฉพาะรายการที่ FAIL เพราะ FITS")
+    if not row["test"]:
+        base = row["serial"]
+        prev = store.first_pass(base)
+        if prev is not None:
+            raise ValueError(f"{base} ผ่านไปแล้วในรายการอื่น (เวลา {prev['scanned_at'].replace('T', ' ')})")
+    return row, row["fits_handshake"] == "OK"
 
 
 def launch(app: AppConfig, product_id: str | None = None) -> str:

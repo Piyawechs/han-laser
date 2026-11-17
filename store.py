@@ -36,8 +36,13 @@ CREATE TABLE IF NOT EXISTS verifications (
     shift      TEXT NOT NULL,
     workorder  TEXT NOT NULL,
     iqr        TEXT NOT NULL DEFAULT '',
-    result     TEXT NOT NULL,          -- PASS | FAIL
-    reason     TEXT NOT NULL DEFAULT '' -- '' | NOT_FOUND | WRONG_WORKORDER | DUPLICATE
+    result     TEXT NOT NULL,          -- PASS | FAIL | PENDING (กำลังส่ง FITS)
+    reason     TEXT NOT NULL DEFAULT '', -- '' | NOT_FOUND | WRONG_WORKORDER | DUPLICATE | TEST_SERIAL
+                                         --    | FITS_HANDSHAKE | FITS_LOG | FITS_ERROR
+    test          INTEGER NOT NULL DEFAULT 0,   -- 1 = Engineer test (_test, FITS TEST endpoint)
+    fits_handshake TEXT NOT NULL DEFAULT '',    -- '' | OK | NG | ERROR
+    fits_log       TEXT NOT NULL DEFAULT '',    -- '' | OK | NG | ERROR
+    fits_message   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_verif_serial ON verifications(serial, result);
 CREATE INDEX IF NOT EXISTS ix_verif_workorder ON verifications(workorder);
@@ -58,8 +63,12 @@ class Store:
     def _migrate(self) -> None:
         """เพิ่มคอลัมน์ใหม่ให้ DB ที่สร้างจากเวอร์ชันก่อน"""
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(verifications)")}
-        if "iqr" not in cols:
-            self.conn.execute("ALTER TABLE verifications ADD COLUMN iqr TEXT NOT NULL DEFAULT ''")
+        for name, decl in (("iqr", "TEXT NOT NULL DEFAULT ''"), ("test", "INTEGER NOT NULL DEFAULT 0"),
+                           ("fits_handshake", "TEXT NOT NULL DEFAULT ''"),
+                           ("fits_log", "TEXT NOT NULL DEFAULT ''"),
+                           ("fits_message", "TEXT NOT NULL DEFAULT ''")):
+            if name not in cols:
+                self.conn.execute(f"ALTER TABLE verifications ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -123,16 +132,27 @@ class Store:
 
     def first_pass(self, serial: str) -> sqlite3.Row | None:
         return self.conn.execute(
-            "SELECT * FROM verifications WHERE serial = ? AND result = 'PASS' ORDER BY id LIMIT 1",
+            "SELECT * FROM verifications WHERE serial = ? AND result = 'PASS' AND test = 0 ORDER BY id LIMIT 1",
             (serial,)).fetchone()
 
+    def verification(self, vid: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM verifications WHERE id = ?", (vid,)).fetchone()
+
+    def finish_verification(self, vid: int, result: str, reason: str, fits_handshake: str,
+                            fits_log: str, fits_message: str) -> None:
+        self.conn.execute(
+            "UPDATE verifications SET result = ?, reason = ?, fits_handshake = ?, fits_log = ?,"
+            " fits_message = ? WHERE id = ?",
+            (result, reason, fits_handshake, fits_log, fits_message, vid))
+
     def add_verification(self, scanned_at: str, raw_code: str, serial: str, product: str, en: str,
-                         shift: str, workorder: str, result: str, reason: str, iqr: str = "") -> int:
+                         shift: str, workorder: str, result: str, reason: str, iqr: str = "",
+                         test: bool = False) -> int:
         cur = self.conn.execute(
             "INSERT INTO verifications"
-            " (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason))
+            " (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason, test)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scanned_at, raw_code, serial, product, en, shift, workorder, iqr, result, reason, int(test)))
         return cur.lastrowid
 
     def list_verifications(self, workorder: str | None = None, limit: int = 300) -> list[sqlite3.Row]:
@@ -149,10 +169,10 @@ class Store:
         generated = self.conn.execute(
             "SELECT COALESCE(SUM(count), 0) FROM batches WHERE lot = ?", (workorder,)).fetchone()[0]
         passed = self.conn.execute(
-            "SELECT COUNT(DISTINCT serial) FROM verifications WHERE workorder = ? AND result = 'PASS'",
+            "SELECT COUNT(DISTINCT serial) FROM verifications WHERE workorder = ? AND result = 'PASS' AND test = 0",
             (workorder,)).fetchone()[0]
         failed = self.conn.execute(
-            "SELECT COUNT(*) FROM verifications WHERE workorder = ? AND result = 'FAIL'",
+            "SELECT COUNT(*) FROM verifications WHERE workorder = ? AND result = 'FAIL' AND test = 0",
             (workorder,)).fetchone()[0]
         return {"generated": generated, "passed": passed, "failed": failed}
 

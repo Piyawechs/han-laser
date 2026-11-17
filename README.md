@@ -40,6 +40,36 @@ python -m venv .venv
 - รายการใน dropdown (EN, Shift, Workorder, iQR code) Engineer ตั้งได้ที่หน้า Settings → แท็บ "Verify และทั่วไป" บรรทัดละ 1 รายการ
 - **Workorder = Lot ตอน Generate** ช่อง Workorder ในหน้า Generate ใช้รายการชุดเดียวกัน
 
+### FITS (handshake + log หลัง verify)
+ถ้าเปิดใช้ใน Settings แต่ละชิ้นที่**ตรวจในเครื่องผ่าน**จะทำต่อตามลำดับนี้:
+1. ส่ง FITS **handshake** (model, operation, serial)
+2. ถ้า handshake ผ่าน ส่ง **log** ตาม parameter ที่ตั้งไว้ ได้ PASS เมื่อผ่านครบ
+
+ชิ้นที่ตรวจในเครื่องไม่ผ่าน (ไม่พบ / ผิด Workorder / ซ้ำ) จะไม่ถูกส่งไป FITS
+
+ถ้า FITS ปฏิเสธ หรือเน็ตล่ม / FITS ไม่ตอบ จะขึ้น **FAIL** และมีปุ่ม **ส่ง FITS ซ้ำ** หรือดับเบิลคลิกแถวนั้นในตาราง
+ถ้า handshake ผ่านไปแล้ว การส่งซ้ำจะส่งแค่ log
+ผลของ handshake และ log จะบันทึกลง DB คู่กับการสแกน (คอลัมน์ `fits_handshake`, `fits_log`, `fits_message`)
+
+**ติดตั้ง**
+- ติดตั้ง wheel ของ FITS client ใน `.venv`: `.venv\Scripts\pip install fabrinet_fits_client-*.whl`
+- คัดลอก `fits_env.bat` (ไฟล์เดียวกับที่ใช้กับ bobcat bridge) มาไว้ข้าง `start_ui.bat`
+  - `start_ui.bat` จะโหลดไฟล์นี้ก่อนเปิดโปรแกรม (FITS_URL, FITS_PROJECT_ID, FITS_USER, FITS_PASSWORD, FITS_REVISION)
+  - `fits_env.bat` อยู่ใน .gitignore ห้าม commit
+- Settings → "Verify, FITS และทั่วไป" → ตั้งค่า **Model**, **Operation** และ **Parameters** (บรรทัดละ `ชื่อ parameter = ค่า` เรียงตามลำดับใน FITS)
+  - ส่วน "การเชื่อมต่อ" แสดงว่าตั้ง FITS_* ครบหรือยัง แต่ไม่แสดงค่าจริง
+- ช่อง Workorder ใส่ WO PN คู่กันได้ เช่น `WO-001 = PN-123`
+
+**โหมด Engineer (TEST)** เลือกได้ที่ช่อง "โหมด" ในหน้า Verify ต้องใส่รหัส Engineer
+- สแกน SN ปกติ แล้วโปรแกรมเติม `_test` ให้เอง เช่น `CB26110001` → `CB26110001_test`
+- ส่งไป **FITS TEST endpoint** จริง
+  - ใช้ `FITS_TEST_URL` ถ้าตั้งไว้ ถ้าไม่ตั้งจะใช้ TEST URL ที่มากับ fits_client
+  - ใช้ `FITS_TEST_USER`, `FITS_TEST_PASSWORD`, `FITS_TEST_PROJECT_ID`, `FITS_TEST_REVISION` ถ้าตั้งไว้ ถ้าไม่ตั้งจะใช้ FITS_* ตัวปกติ
+- ยังเช็กว่า serial มีในระบบและตรง Workorder แต่**ไม่เช็กซ้ำ** (ทดลองซ้ำได้) และไม่นับรวมในยอดผ่านของ Workorder
+- ในประวัติขึ้นเป็น `PASS TEST` / `FAIL TEST`
+- โหมด Operator ไม่รับ SN ที่ลงท้าย `_test`
+- กด "ออกจาก Engineer mode" แล้วจะกลับเป็นโหมด Operator
+
 ### Engineer mode
 - หน้า Settings ถูกล็อกไว้ ต้องกด **เข้าสู่ Engineer mode** แล้วใส่รหัสผ่าน
 - ครั้งแรกที่ยังไม่มีรหัส โปรแกรมจะให้ตั้งรหัสใหม่ (อย่างน้อย 4 ตัว)
