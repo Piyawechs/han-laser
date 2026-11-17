@@ -319,8 +319,8 @@ class SettingsTab(QWidget):
                             for n, ok in items)
         self.fits_env.setText(f"{wheel}<br>Operator: {fmt(hl.fits_env_status(False))}"
                               f"<br>Engineer (TEST): {fmt(hl.fits_env_status(True))}"
-                              "<br><span style='color:#6b7280'>ค่าเหล่านี้อ่านจาก fits_env.bat ข้าง start_ui.bat"
-                              " (ไม่เก็บใน config)</span>")
+                              "<br><span style='color:#6b7280'>ค่าเหล่านี้อ่านจากไฟล์ .env ในโฟลเดอร์ han-laser"
+                              " ตอนเปิดโปรแกรม (ไม่เก็บใน config) แก้ .env แล้วต้องเปิดโปรแกรมใหม่</span>")
 
     def _update_example(self) -> None:
         p = hl.Product(id="x", name="x", template="x", serial_txt="x", prefix=self.prefix.text().strip(),

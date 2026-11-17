@@ -460,6 +460,42 @@ FITS_ENV = {"url": "FITS_URL", "project_id": "FITS_PROJECT_ID", "user_name": "FI
             "user_password": "FITS_PASSWORD", "revision": "FITS_REVISION"}
 
 
+ENV_FILE = ".env"
+
+
+def load_env_file(path: str | Path, environ=None, override: bool = True) -> list[str]:
+    """อ่านไฟล์ .env (KEY=VALUE บรรทัดละตัว) ใส่ environment คืนรายชื่อ key ที่ตั้ง (ไม่คืนค่า)
+
+    รองรับ: บรรทัดว่าง, # comment, 'export KEY=...', ค่าในเครื่องหมาย "..." หรือ '...'
+    override=True: ค่าใน .env ชนะตัวแปรที่ตั้งไว้ใน Windows แล้ว
+    """
+    env = os.environ if environ is None else environ
+    path = Path(path)
+    if not path.is_file():
+        return []
+    keys = []
+    for n, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("export "):
+            s = s[7:].lstrip()
+        key, sep, val = s.partition("=")
+        key, val = key.strip(), val.strip()
+        if not sep or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            raise ValueError(f"{path.name} บรรทัด {n}: ต้องเป็นรูปแบบ KEY=VALUE")
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        elif " #" in val:                      # comment ท้ายบรรทัด (ค่าที่ไม่มีเครื่องหมายคำพูด)
+            val = val.split(" #", 1)[0].rstrip()
+        if val.startswith("<") and val.endswith(">"):
+            continue                           # ยังเป็นค่าตัวอย่าง <...> นับว่ายังไม่ได้ตั้ง
+        if override or key not in env:
+            env[key] = val
+        keys.append(key)
+    return keys
+
+
 def fits_env_status(test: bool = False, environ=None) -> list[tuple[str, bool]]:
     """ตัวแปร FITS_* ตัวไหนตั้งแล้ว (ไม่คืนค่าจริง) ใช้แสดงในหน้า Settings
     โหมด test: FITS_TEST_* ถ้ามีใช้ก่อน ไม่มีใช้ FITS_* ส่วน URL ไม่ตั้งได้ (ใช้ TEST endpoint ของ fits_client)"""
@@ -492,7 +528,7 @@ def make_fits_client(app: AppConfig, test: bool = False, environ=None):
     missing = [FITS_ENV[k] for k, v in values.items() if not v]
     if missing:
         raise FitsSetupError("ยังไม่ได้ตั้งค่า FITS: " + ", ".join(missing)
-                             + " (ใส่ใน fits_env.bat ข้าง start_ui.bat)")
+                             + " (ใส่ในไฟล์ .env ในโฟลเดอร์ han-laser แล้วเปิดโปรแกรมใหม่)")
     cfg = fits_client.FitsConfig(timeout=float(app.fits.timeout), **values)
     return fits_client.FitsClient(cfg)
 
@@ -617,6 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     try:
+        load_env_file(Path(args.config).resolve().parent / ENV_FILE)
         app = AppConfig.load(args.config)
         if args.cmd in ("generate", "run"):
             b = generate(app, args.product, args.count, args.lot)

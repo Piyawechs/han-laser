@@ -32,6 +32,9 @@ def main() -> int:
     sys.excepthook = excepthook
 
     try:
+        import han_laser
+        # FITS_* (URL / user / password) จาก .env ข้างไฟล์ config (ไม่เข้า git)
+        han_laser.load_env_file(cfg.resolve().parent / han_laser.ENV_FILE)
         win = MainWindow(cfg)
     except Exception as e:  # config เสีย ฯลฯ
         QMessageBox.critical(None, "han-laser", f"เปิดไม่ได้: {e}\n\nตรวจไฟล์ {cfg}")

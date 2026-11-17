@@ -53,9 +53,10 @@ python -m venv .venv
 
 **ติดตั้ง**
 - ติดตั้ง wheel ของ FITS client ใน `.venv`: `.venv\Scripts\pip install fabrinet_fits_client-*.whl`
-- คัดลอก `fits_env.bat` (ไฟล์เดียวกับที่ใช้กับ bobcat bridge) มาไว้ข้าง `start_ui.bat`
-  - `start_ui.bat` จะโหลดไฟล์นี้ก่อนเปิดโปรแกรม (FITS_URL, FITS_PROJECT_ID, FITS_USER, FITS_PASSWORD, FITS_REVISION)
-  - `fits_env.bat` อยู่ใน .gitignore ห้าม commit
+- คัดลอก `.env.example` เป็น `.env` ในโฟลเดอร์ han-laser แล้วกรอกค่าจริง (FITS_URL, FITS_PROJECT_ID, FITS_USER, FITS_PASSWORD, FITS_REVISION)
+  - โปรแกรมอ่าน `.env` เองตอนเปิด (ทั้ง UI และ CLI) ค่าใน `.env` ชนะตัวแปรที่ตั้งไว้ใน Windows
+  - ค่าที่ยังเป็น `<...>` นับว่ายังไม่ได้ตั้ง แก้ `.env` แล้วต้องเปิดโปรแกรมใหม่
+  - `.env` อยู่ใน .gitignore ห้าม commit
 - Settings → "Verify, FITS และทั่วไป" → ตั้งค่า **Model**, **Operation** และ **Parameters** (บรรทัดละ `ชื่อ parameter = ค่า` เรียงตามลำดับใน FITS)
   - ส่วน "การเชื่อมต่อ" แสดงว่าตั้ง FITS_* ครบหรือยัง แต่ไม่แสดงค่าจริง
 - ช่อง Workorder ใส่ WO PN คู่กันได้ เช่น `WO-001 = PN-123`
@@ -64,7 +65,7 @@ python -m venv .venv
 - สแกน SN ปกติ แล้วโปรแกรมเติม `_test` ให้เอง เช่น `CB26110001` → `CB26110001_test`
 - ส่งไป **FITS TEST endpoint** จริง
   - ใช้ `FITS_TEST_URL` ถ้าตั้งไว้ ถ้าไม่ตั้งจะใช้ TEST URL ที่มากับ fits_client
-  - ใช้ `FITS_TEST_USER`, `FITS_TEST_PASSWORD`, `FITS_TEST_PROJECT_ID`, `FITS_TEST_REVISION` ถ้าตั้งไว้ ถ้าไม่ตั้งจะใช้ FITS_* ตัวปกติ
+  - ใช้ `FITS_TEST_USER`, `FITS_TEST_PASSWORD`, `FITS_TEST_PROJECT_ID`, `FITS_TEST_REVISION` ใน `.env` ถ้าตั้งไว้ ถ้าไม่ตั้งจะใช้ FITS_* ตัวปกติ
 - ยังเช็กว่า serial มีในระบบและตรง Workorder แต่**ไม่เช็กซ้ำ** (ทดลองซ้ำได้) และไม่นับรวมในยอดผ่านของ Workorder
 - ในประวัติขึ้นเป็น `PASS TEST` / `FAIL TEST`
 - โหมด Operator ไม่รับ SN ที่ลงท้าย `_test`

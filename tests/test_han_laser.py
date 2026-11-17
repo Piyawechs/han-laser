@@ -399,6 +399,39 @@ class FitsCoreTest(Base):
             self.assertEqual(hl.verify(s, "CB26119999", "E", "A", "WO1", test=True).reason, "NOT_FOUND")
 
 
+class EnvFileTest(Base):
+    def test_load(self):
+        f = self.dir / ".env"
+        f.write_text("# comment\n\nFITS_URL=https://x/svc\nexport FITS_USER = 'u 1'\n"
+                     'FITS_PASSWORD="p#1"\nFITS_REVISION=2 # tail comment\nFITS_PROJECT_ID=<project id>\n',
+                     encoding="utf-8")
+        env = {"FITS_URL": "old", "OTHER": "keep"}
+        keys = hl.load_env_file(f, environ=env)
+        self.assertEqual(keys, ["FITS_URL", "FITS_USER", "FITS_PASSWORD", "FITS_REVISION"])
+        self.assertEqual(env, {"FITS_URL": "https://x/svc", "OTHER": "keep", "FITS_USER": "u 1",
+                               "FITS_PASSWORD": "p#1", "FITS_REVISION": "2"})
+        self.assertNotIn("FITS_PROJECT_ID", env)          # <...> = ยังไม่ได้ตั้ง
+
+    def test_no_override_and_missing_file(self):
+        f = self.dir / ".env"
+        f.write_text("A=1\n", encoding="utf-8")
+        env = {"A": "0"}
+        hl.load_env_file(f, environ=env, override=False)
+        self.assertEqual(env["A"], "0")
+        self.assertEqual(hl.load_env_file(self.dir / "nope.env", environ=env), [])
+
+    def test_bad_line(self):
+        f = self.dir / ".env"
+        f.write_text("not a pair\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            hl.load_env_file(f, environ={})
+
+    def test_example_file_sets_nothing(self):
+        env = {}
+        self.assertEqual(hl.load_env_file(ROOT / ".env.example", environ=env), [])
+        self.assertEqual(env, {})
+
+
 class StoreTest(unittest.TestCase):
     def test_migrates_old_verifications_table(self):
         import sqlite3
