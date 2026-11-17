@@ -192,6 +192,21 @@ class SettingsTab(QWidget):
         fbox = QGroupBox("FITS")
         fbox.setLayout(fform)
 
+        # ---- กล้อง Dino-Lite (โหมดกล้องในหน้า Verify)
+        self.cam_index = QComboBox()
+        self.cam_index.setEditable(True)
+        self.cam_index.addItems(["auto", "0", "1", "2", "3"])
+        self.cam_regex = QLineEdit()
+        self.cam_help = QLabel()
+        self.cam_help.setWordWrap(True)
+        self.cam_help.setStyleSheet("color: #6b7280;")
+        cform = QFormLayout()
+        cform.addRow("กล้อง (index)", self.cam_index)
+        cform.addRow("Serial regex", self.cam_regex)
+        cform.addRow("", self.cam_help)
+        cbox = QGroupBox("กล้อง Dino-Lite (โหมดกล้องในหน้า Verify)")
+        cbox.setLayout(cform)
+
         save = QPushButton("บันทึก")
         save.setMinimumHeight(36)
         save.setStyleSheet("QPushButton { font-weight: bold; }")
@@ -213,6 +228,7 @@ class SettingsTab(QWidget):
         p2 = QVBoxLayout(page2)
         p2.addWidget(vbox)
         p2.addWidget(fbox)
+        p2.addWidget(cbox)
         p2.addWidget(gbox)
         p2.addStretch(1)
         scroll2 = QScrollArea()                      # จอเล็กเลื่อนดูได้
@@ -257,6 +273,14 @@ class SettingsTab(QWidget):
         self.fits_timeout.setValue(int(fs.timeout))
         self._update_fits_env()
         self.iqr_codes.setPlainText("\n".join(self.work.iqr_codes))
+        self.cam_index.setCurrentText(str(self.work.camera.index))
+        self.cam_regex.setText(self.work.camera.serial_regex)
+        default = hl.default_serial_regex(self.work) or "(ไม่มี prefix: รับทุก code)"
+        self.cam_regex.setPlaceholderText(f"ว่าง = {default}")
+        self.cam_help.setText(
+            "<b>auto</b> = กล้องตัวแรกที่ชื่อมีคำว่า Dino (ไม่เลือกกล้องในตัวโน้ตบุ๊ก) หรือใส่เลข index<br>"
+            "ชิ้นงานอาจมีหลาย code: เฉพาะ code ที่ตรง regex เท่านั้นที่ส่งไป verify "
+            f"(ไม่สนตัวพิมพ์เล็ก/ใหญ่) ว่างไว้ = ขึ้นต้นด้วย prefix ของ product: <b>{default}</b>")
         self._fill_list(self.work.last_product)
 
     def _fill_list(self, select: str | None = None) -> None:
@@ -382,6 +406,8 @@ class SettingsTab(QWidget):
         fs.fsp = self.fits_fsp.currentText()
         fs.timeout = float(self.fits_timeout.value())
         self.work.iqr_codes = lines_of(self.iqr_codes)
+        self.work.camera.index = self.cam_index.currentText().strip().lower() or "auto"
+        self.work.camera.serial_regex = self.cam_regex.text().strip()
         if self.work.last_product not in self.work.products:
             self.work.last_product = next(iter(self.work.products))
         try:

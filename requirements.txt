@@ -1,1 +1,6 @@
 PySide6>=6.5
+# โหมดกล้อง Dino-Lite ในหน้า Verify (ไม่ติดตั้งก็ใช้เครื่องสแกน USB ได้ตามปกติ)
+# ใช้ opencv แบบ headless เพราะ opencv-python มี Qt ของตัวเองซึ่งชนกับ PySide6
+opencv-python-headless>=4.8
+zxing-cpp>=2.2
+pygrabber; sys_platform == "win32"

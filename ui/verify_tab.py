@@ -1,14 +1,16 @@
-"""หน้า Verify: สแกน serial หลังมาร์ก ตรวจกับ DB แล้ว handshake + log ไป FITS และเก็บประวัติ"""
+"""หน้า Verify: สแกน serial หลังมาร์ก (เครื่องสแกน USB หรือกล้อง Dino-Lite) ตรวจกับ DB
+แล้ว handshake + log ไป FITS และเก็บประวัติ"""
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 import han_laser as hl
+from ui.camera import PREVIEW_WIDTH, CameraWorker, CodeGate
 from ui.common import error
 
 PLACEHOLDER = "— เลือก —"
@@ -58,6 +60,10 @@ class VerifyTab(QWidget):
         self.last_fail_vid: int | None = None   # รายการล่าสุดที่ FAIL เพราะ FITS (ปุ่มส่งซ้ำ)
         self._jobs = []                         # กัน signals ถูกเก็บกวาดก่อนเวลา
         self.pool = QThreadPool.globalInstance()
+        self.worker: CameraWorker | None = None   # thread กล้อง (เฉพาะโหมดกล้อง)
+        self._cam_key = None
+        self.gate = CodeGate()
+        self.pattern = None                     # regex เลือก serial จาก code ที่กล้องอ่านได้
 
         # ---- โหมด
         self.mode = QComboBox()
@@ -102,6 +108,49 @@ class VerifyTab(QWidget):
         self.scan_hint = QLabel()
         self.scan_hint.setStyleSheet(f"color: {GREY};")
         self.scan_hint.setAlignment(Qt.AlignCenter)
+        self.scan_hint.setWordWrap(True)
+
+        # ---- รับค่าจาก: เครื่องสแกน USB หรือกล้อง Dino-Lite (สลับได้ตลอด)
+        self.src_usb = QRadioButton("เครื่องสแกน USB")
+        self.src_cam = QRadioButton("กล้อง Dino-Lite (อ่านต่อเนื่อง)")
+        self.src_group = QButtonGroup(self)
+        src_row = QHBoxLayout()
+        src_lbl = QLabel("รับค่าจาก")
+        src_lbl.setFont(big_font(12))
+        src_row.addWidget(src_lbl)
+        for b in (self.src_usb, self.src_cam):
+            b.setFont(big_font(12, False))
+            b.setFocusPolicy(Qt.NoFocus)                   # ไม่แย่ง focus จากช่องสแกน
+            self.src_group.addButton(b)
+            src_row.addWidget(b)
+        src_row.addStretch(1)
+        self.src_usb.setChecked(True)
+
+        # ---- ภาพจากกล้อง
+        self.cam_view = QLabel("กล้องปิดอยู่")
+        self.cam_view.setFixedSize(PREVIEW_WIDTH, PREVIEW_WIDTH * 4 // 5)
+        self.cam_view.setAlignment(Qt.AlignCenter)
+        self.cam_view.setStyleSheet("background: #111827; color: #d1d5db; border-radius: 6px;")
+        self.cam_read = QLabel()
+        self.cam_read.setFont(big_font(12))
+        self.cam_read.setAlignment(Qt.AlignCenter)
+        self.cam_read.setWordWrap(True)
+        self.cam_status = QLabel()
+        self.cam_status.setWordWrap(True)
+        self.cam_status.setMaximumWidth(PREVIEW_WIDTH)
+        self.cam_status.setStyleSheet(f"color: {GREY};")
+        self.cam_retry = QPushButton("เชื่อมต่อกล้องใหม่")
+        self.cam_retry.setFocusPolicy(Qt.NoFocus)
+        self.cam_retry.hide()
+        self.cam_box = QWidget()
+        cl = QVBoxLayout(self.cam_box)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.addWidget(self.cam_view)
+        cl.addWidget(self.cam_read)
+        cl.addWidget(self.cam_status)
+        cl.addWidget(self.cam_retry, 0, Qt.AlignHCenter)
+        cl.addStretch(1)
+        self.cam_box.hide()
 
         # ---- ผลลัพธ์
         self.result_box = QFrame()
@@ -148,16 +197,24 @@ class VerifyTab(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         hint = QLabel("ประวัติการ verify ล่าสุด (Workorder ที่เลือก) · ดับเบิลคลิกแถวที่ FAIL เพราะ FITS เพื่อส่งซ้ำ")
 
+        left = QVBoxLayout()
+        left.addLayout(sel)
+        left.addSpacing(6)
+        left.addLayout(src_row)
+        self.scan_lbl = QLabel("Serial (สแกน code บนชิ้นงาน)")
+        self.scan_lbl.setFont(big_font(12))
+        left.addWidget(self.scan_lbl)
+        left.addWidget(self.scan)
+        left.addWidget(self.scan_hint)
+        left.addWidget(self.result_box)
+        left.addStretch(1)
+        top = QHBoxLayout()
+        top.addLayout(left, 1)
+        top.addWidget(self.cam_box)
+
         lay = QVBoxLayout(self)
         lay.addWidget(self.banner)
-        lay.addLayout(sel)
-        lay.addSpacing(6)
-        scan_lbl = QLabel("Serial (สแกน code บนชิ้นงาน)")
-        scan_lbl.setFont(big_font(12))
-        lay.addWidget(scan_lbl)
-        lay.addWidget(self.scan)
-        lay.addWidget(self.scan_hint)
-        lay.addWidget(self.result_box)
+        lay.addLayout(top)
         lay.addLayout(stats)
         lay.addWidget(hint)
         lay.addWidget(self.table, 1)
@@ -165,6 +222,8 @@ class VerifyTab(QWidget):
         for c in (self.en, self.shift, self.workorder, self.iqr):
             c.currentIndexChanged.connect(self._selection_changed)
         self.mode.currentIndexChanged.connect(self._mode_changed)
+        self.src_cam.toggled.connect(self._source_changed)
+        self.cam_retry.clicked.connect(self.start_camera)
         self.scan.returnPressed.connect(self.do_verify)
         self.retry_btn.clicked.connect(lambda: self.retry(self.last_fail_vid))
         self.table.cellDoubleClicked.connect(self._row_double_clicked)
@@ -184,7 +243,17 @@ class VerifyTab(QWidget):
             idx = combo.findData(cur) if cur is not None else -1
             combo.setCurrentIndex(max(idx, 0))
             combo.blockSignals(False)
-        self._selection_changed()
+        self.pattern = hl.serial_pattern(app)
+        for b in (self.src_usb, self.src_cam):
+            b.blockSignals(True)
+        (self.src_cam if app.input_mode == "camera" else self.src_usb).setChecked(True)
+        for b in (self.src_usb, self.src_cam):
+            b.blockSignals(False)
+        c = app.camera
+        same_cam = self.worker is not None and self._cam_key == (c.index, c.width, c.height)
+        if same_cam:
+            self.worker.pattern = self.pattern
+        self._apply_source(start=not same_cam)
 
     @property
     def test_mode(self) -> bool:
@@ -219,10 +288,17 @@ class VerifyTab(QWidget):
         self.scan.setEnabled(ok)
         if self.busy:
             self.scan.setPlaceholderText("กำลังส่ง FITS…")
+            if self.camera_mode:
+                self.scan_hint.setText("กำลังส่ง FITS… ชิ้นถัดไปจะตรวจเมื่อส่งเสร็จ")
         elif ok:
             self.scan.setPlaceholderText("สแกน QR code ที่นี่" + ("  (จะเติม _test)" if self.test_mode else ""))
             fits = "แล้ว handshake + log ไป FITS" if self.win.app.fits.enabled else "(ปิดการส่ง FITS อยู่)"
-            self.scan_hint.setText(f"สแกนแล้วระบบตรวจทันที {fits}")
+            if self.camera_mode:
+                self.scan_hint.setText(f"วางชิ้นงานใต้กล้อง อ่านได้แล้วระบบตรวจทันที {fits}"
+                                       + ("  (จะเติม _test)" if self.test_mode else "")
+                                       + "\nชิ้นเดิมจะไม่ตรวจซ้ำจนกว่าจะเอาออกจากกล้อง")
+            else:
+                self.scan_hint.setText(f"สแกนแล้วระบบตรวจทันที {fits}")
             self.focus_scan()
         else:
             missing = [n for n, v in zip(("EN", "Shift", "Workorder", "iQR code"), self.selection()) if not v]
@@ -243,6 +319,104 @@ class VerifyTab(QWidget):
     def focus_scan(self) -> None:
         if self.scan.isEnabled():
             QTimer.singleShot(0, self.scan.setFocus)
+
+    # ------------------------------------------------------------ camera
+    @property
+    def camera_mode(self) -> bool:
+        return self.src_cam.isChecked()
+
+    def _source_changed(self, _checked: bool = False) -> None:
+        mode = "camera" if self.camera_mode else "usb"
+        app = self.win.app
+        if app.input_mode != mode:          # จำไว้ใน config เปิดโปรแกรมครั้งหน้าใช้แบบเดิม
+            app.input_mode = mode
+            try:
+                app.save()
+            except (ValueError, OSError):
+                pass                        # บันทึกไม่ได้ก็ยังใช้ได้รอบนี้
+            work = getattr(getattr(self.win, "settings_tab", None), "work", None)
+            if work is not None:            # กันหน้า Settings เอาค่าเก่าไปเขียนทับ
+                work.input_mode = mode
+        self._apply_source()
+
+    def _apply_source(self, start: bool = True) -> None:
+        cam = self.camera_mode
+        self.scan.setVisible(not cam)
+        self.cam_box.setVisible(cam)
+        self.scan_lbl.setText("Serial (อ่าน DataMatrix จากกล้องอัตโนมัติ)" if cam else "Serial (สแกน code บนชิ้นงาน)")
+        if not cam:
+            self.stop_camera()
+        elif start:
+            self.start_camera()
+        self._selection_changed()
+
+    def start_camera(self) -> None:
+        self.stop_camera()
+        c = self.win.app.camera
+        self._cam_key = (c.index, c.width, c.height)
+        self.gate.reset()
+        w = CameraWorker(c.index, c.width, c.height, self.pattern)
+        w.opened.connect(self._cam_opened)
+        w.failed.connect(self._cam_failed)
+        w.codes.connect(self._on_codes)
+        w.frame.connect(self._on_frame)
+        self.worker = w
+        self.cam_retry.hide()
+        self.cam_view.setText("กำลังเปิดกล้อง…")
+        self.cam_read.setText("")
+        self.cam_status.setStyleSheet(f"color: {GREY};")
+        self.cam_status.setText("กล้อง: " + ("หา Dino-Lite อัตโนมัติ" if c.index == "auto" else f"index {c.index}"))
+        w.start()
+
+    def stop_camera(self) -> None:
+        w, self.worker = self.worker, None
+        if w is not None:
+            w.requestInterruption()
+            w.wait(3000)
+        self.cam_view.clear()
+        self.cam_view.setText("กล้องปิดอยู่")
+        self.cam_read.setText("")
+
+    def _stale(self) -> bool:
+        """signal จาก thread กล้องตัวเก่าที่หยุดไปแล้ว (มาถึงช้า) ให้ทิ้ง"""
+        s = self.sender()
+        return s is not None and s is not self.worker
+
+    def _cam_opened(self, desc: str) -> None:
+        if not self._stale():
+            self.cam_status.setText(f"กล้อง: {desc}")
+
+    def _cam_failed(self, msg: str) -> None:
+        if self._stale():
+            return
+        self.worker = None                  # thread จบไปแล้ว
+        self.cam_view.clear()
+        self.cam_view.setText("กล้องไม่พร้อม")
+        self.cam_read.setText("")
+        self.cam_status.setStyleSheet(f"color: {RED};")
+        self.cam_status.setText(msg)
+        self.cam_retry.show()
+
+    def _on_frame(self, img) -> None:
+        if not self._stale():
+            self.cam_view.setPixmap(QPixmap.fromImage(img))
+
+    def _on_codes(self, codes: list) -> None:
+        if self._stale() or not self.camera_mode:
+            return
+        serial = hl.pick_serial(self.pattern, codes)
+        if serial:
+            self.cam_read.setStyleSheet(f"color: {GREEN};")
+            self.cam_read.setText(f"อ่านได้: {serial}")
+        elif codes:
+            self.cam_read.setStyleSheet(f"color: {ORANGE};")
+            self.cam_read.setText("พบ code แต่ไม่ใช่ serial: " + ", ".join(codes))
+        else:
+            self.cam_read.setStyleSheet(f"color: {GREY};")
+            self.cam_read.setText("วางชิ้นงานใต้กล้อง")
+        got = self.gate.feed(serial, self.ready() and not self.busy)
+        if got:
+            self.do_verify(got)
 
     # ------------------------------------------------------------ result box
     def _paint(self, color: str, word: str, serial: str, msg: str, retry: bool = False) -> None:
@@ -268,9 +442,11 @@ class VerifyTab(QWidget):
             QApplication.beep()
 
     # ------------------------------------------------------------ verify + FITS
-    def do_verify(self) -> None:
-        raw = self.scan.text()
-        self.scan.clear()
+    def do_verify(self, raw: str | None = None) -> None:
+        """raw = ค่าจากกล้อง; None = อ่านจากช่องสแกน (เครื่องสแกน USB)"""
+        if raw is None:
+            raw = self.scan.text()
+            self.scan.clear()
         if self.busy or not self.ready() or not raw.strip():
             return self.focus_scan()
         en, shift, wo, iqr = self.selection()

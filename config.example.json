@@ -21,6 +21,14 @@
     "fsp": ",",
     "timeout": 20.0
   },
+  "_comment_camera": "หน้า Verify รับค่าจาก usb (เครื่องสแกน) หรือ camera (Dino-Lite) สลับได้ในหน้า Verify; serial_regex ว่าง = ขึ้นต้นด้วย prefix ของ product",
+  "input_mode": "usb",
+  "camera": {
+    "index": "auto",
+    "serial_regex": "",
+    "width": 1280,
+    "height": 1024
+  },
 
   "products": {
     "ceramic_box": {

@@ -386,5 +386,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"บันทึก config แล้ว {datetime.now():%H:%M:%S}", 5000)
 
     def closeEvent(self, e):
+        self.verify_tab.stop_camera()
         self.store.close()
         super().closeEvent(e)

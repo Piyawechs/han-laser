@@ -287,6 +287,118 @@ class UISmokeTest(unittest.TestCase):
             v.mode.setCurrentIndex(1)
         self.assertFalse(v.test_mode)
 
+    # ---------------- camera
+    def test_code_gate(self):
+        from ui.camera import CodeGate
+        g = CodeGate(clear_after=3)
+        self.assertEqual(g.feed("A"), "A")
+        self.assertIsNone(g.feed("A"))                    # ชิ้นเดิมยังอยู่ใต้กล้อง
+        self.assertIsNone(g.feed(None))
+        self.assertIsNone(g.feed("A"))                    # หายไปแค่เฟรมเดียว ยังไม่นับว่าเอาออก
+        self.assertEqual(g.feed("B"), "B")                # เปลี่ยนชิ้น ส่งทันที
+        for _ in range(3):
+            g.feed(None)
+        self.assertEqual(g.feed("B"), "B")                # เอาออกแล้ววางใหม่ ส่งอีกครั้ง
+        self.assertIsNone(g.feed("C", can_accept=False))  # ยังไม่พร้อม ไม่นับว่าส่งแล้ว
+        self.assertEqual(g.feed("C"), "C")
+
+    def _camera_tab(self):
+        """สลับเป็นโหมดกล้องโดยใช้ worker ปลอม (ไม่ต้องมีกล้องจริง)"""
+        from PySide6.QtCore import QObject, Signal
+        from PySide6.QtGui import QImage
+
+        class FakeWorker(QObject):
+            opened, failed, codes, frame = Signal(str), Signal(str), Signal(list), Signal(QImage)
+            instances = []
+
+            def __init__(self, index, width, height, pattern):
+                super().__init__()
+                self.index, self.pattern, self.running = index, pattern, False
+                FakeWorker.instances.append(self)
+
+            def start(self):
+                self.running = True
+
+            def requestInterruption(self):
+                self.running = False
+
+            def wait(self, _ms):
+                return True
+
+        p = mock.patch("ui.verify_tab.CameraWorker", FakeWorker)
+        p.start()
+        self.addCleanup(p.stop)
+        return FakeWorker
+
+    def test_camera_mode_verifies_once_per_piece(self):
+        import han_laser as hl
+        Fake = self._camera_tab()
+        hl.generate(self.win.app, "ceramic_box", 3, "WO-TEST-001", store=self.win.store)
+        v = self.win.verify_tab
+        v.reload()
+        v.src_cam.setChecked(True)
+        self.assertTrue(v.camera_mode)
+        self.assertEqual(self.win.app.input_mode, "camera")
+        saved = json.loads((self.dir / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["input_mode"], "camera")       # จำไว้ใช้ครั้งหน้า
+        self.assertTrue(v.scan.isHidden() and not v.cam_box.isHidden())
+        w = Fake.instances[-1]
+        self.assertTrue(w.running)
+
+        first = hl.preview(self.win.app, "ceramic_box", 1, store=self.win.store)[0][:-4] + "0001"
+        other = "384008262264500007"
+        w.codes.emit([other, first])                         # ยังไม่เลือก EN ฯลฯ: ยังไม่ตรวจ
+        self.assertEqual(v.table.rowCount(), 0)
+        for combo, val in ((v.en, "EN001"), (v.shift, "A"), (v.workorder, "WO-TEST-001"),
+                           (v.iqr, "IQR-TEST-01")):
+            combo.setCurrentIndex(combo.findData(val))
+        with mock.patch("ui.verify_tab.QApplication.beep"):
+            for _ in range(5):
+                w.codes.emit([other, first])                 # ชิ้นเดิมค้างใต้กล้อง: ตรวจครั้งเดียว
+            self.assertEqual(v.result_word.text(), "PASS")
+            self.assertEqual(v.result_serial.text(), first)
+            self.assertEqual(v.table.rowCount(), 1)
+            w.codes.emit([other])                            # มีแต่ code อื่น: ไม่ตรวจ
+            self.assertIn("ไม่ใช่ serial", v.cam_read.text())
+            for _ in range(v.gate.clear_after):
+                w.codes.emit([])                             # เอาชิ้นออก
+            w.codes.emit([first])                            # วางชิ้นเดิมซ้ำ: ตรวจอีกครั้ง = ซ้ำ
+            self.assertEqual(v.result_word.text(), "FAIL")
+            self.assertEqual(v.table.rowCount(), 2)
+
+        old = w                                              # signal จาก thread เก่าต้องไม่มีผล
+        v.src_usb.setChecked(True)
+        self.assertFalse(old.running)
+        self.assertFalse(v.scan.isHidden())
+        old.codes.emit([first[:-4] + "0002"])
+        self.assertEqual(v.table.rowCount(), 2)
+        self.assertEqual(self.win.app.input_mode, "usb")
+
+    def test_camera_failure_shows_retry(self):
+        Fake = self._camera_tab()
+        v = self.win.verify_tab
+        v.src_cam.setChecked(True)
+        Fake.instances[-1].failed.emit("หากล้อง Dino-Lite ไม่เจอ")
+        self.assertIsNone(v.worker)
+        self.assertFalse(v.cam_retry.isHidden())
+        self.assertIn("ไม่เจอ", v.cam_status.text())
+        v.cam_retry.click()
+        self.assertTrue(Fake.instances[-1].running)
+        self.assertTrue(v.cam_retry.isHidden())
+
+    def test_camera_settings_saved(self):
+        self.win.unlock = lambda: True
+        st = self.win.settings_tab
+        st.reload()
+        st.cam_index.setCurrentText("1")
+        st.cam_regex.setText(r"^CB\d+")
+        st.save()
+        self.assertEqual((self.win.app.camera.index, self.win.app.camera.serial_regex), ("1", r"^CB\d+"))
+        st.cam_regex.setText("(bad")
+        with mock.patch("ui.settings_tab.error") as err:
+            st.save()
+        err.assert_called_once()
+
     def test_screenshot(self):
         self.win.resize(1100, 680)
         self.win.show()

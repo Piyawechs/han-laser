@@ -138,6 +138,28 @@ class FitsSettings:
 
 
 @dataclass
+class CameraSettings:
+    """โหมดกล้อง Dino-Lite ในหน้า Verify (อ่าน DataMatrix ต่อเนื่อง)"""
+    index: str = "auto"        # "auto" = กล้องตัวแรกที่ชื่อมี Dino หรือเลข index (0, 1, ...)
+    serial_regex: str = ""     # code ไหนคือ serial; ว่าง = ขึ้นต้นด้วย prefix ของ product
+    width: int = 1280
+    height: int = 1024
+
+    def validate(self) -> None:
+        if self.index != "auto" and not str(self.index).isdigit():
+            raise ValueError(f"กล้อง: index ต้องเป็น auto หรือตัวเลข (ได้ '{self.index}')")
+        try:
+            re.compile(self.serial_regex)
+        except re.error as e:
+            raise ValueError(f"กล้อง: serial regex ไม่ถูกต้อง ({e})") from None
+        if not (isinstance(self.width, int) and isinstance(self.height, int) and self.width > 0 and self.height > 0):
+            raise ValueError("กล้อง: width/height ต้องเป็นจำนวนเต็มบวก")
+
+
+INPUT_MODES = ("usb", "camera")
+
+
+@dataclass
 class AppConfig:
     products: dict = field(default_factory=dict)     # id -> Product
     db_file: str = "data/han_laser.db"
@@ -152,6 +174,8 @@ class AppConfig:
     iqr_codes: list = field(default_factory=list)          # iQR ให้เลือกในหน้า Verify (บันทึกคู่กับ serial)
     workorder_pn: dict = field(default_factory=dict)       # Workorder -> WO PN (ส่ง FITS)
     fits: FitsSettings = field(default_factory=FitsSettings)
+    input_mode: str = "usb"           # หน้า Verify รับค่าจาก "usb" (เครื่องสแกน) หรือ "camera" (Dino-Lite)
+    camera: CameraSettings = field(default_factory=CameraSettings)
     path: Path | None = field(default=None, repr=False, compare=False)
 
     # path ใน config เก็บตามที่เขียน (relative ได้) แล้วค่อย resolve ตอนใช้ จะได้ save กลับเหมือนเดิม
@@ -182,6 +206,9 @@ class AppConfig:
                 and all(isinstance(k, str) and isinstance(v, str) for k, v in self.workorder_pn.items())):
             raise ValueError("workorder_pn ต้องเป็น {workorder: pn}")
         self.fits.validate()
+        if self.input_mode not in INPUT_MODES:
+            raise ValueError(f"input_mode ต้องเป็น {' หรือ '.join(INPUT_MODES)}")
+        self.camera.validate()
         txts = [str(self.abspath(p.serial_txt)).lower() for p in self.products.values()]
         if len(set(txts)) != len(txts):
             raise ValueError("แต่ละ product ต้องใช้ไฟล์ serial_txt คนละไฟล์")
@@ -200,7 +227,8 @@ class AppConfig:
             praw.setdefault("id", pid)
             products[pid] = Product(**praw)
         fits = FitsSettings(**_check_keys(FitsSettings, dict(raw.pop("fits", None) or {}), "fits"))
-        cfg = cls(products=products, fits=fits, path=path, **raw)
+        camera = CameraSettings(**_check_keys(CameraSettings, dict(raw.pop("camera", None) or {}), "camera"))
+        cfg = cls(products=products, fits=fits, camera=camera, path=path, **raw)
         cfg.validate()
         return cfg
 
@@ -211,8 +239,9 @@ class AppConfig:
             return cls.from_dict(json.load(f), path)
 
     def to_dict(self) -> dict:
-        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("products", "path", "fits")}
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("products", "path", "fits", "camera")}
         d["fits"] = asdict(self.fits)
+        d["camera"] = asdict(self.camera)
         d["products"] = {pid: {k: v for k, v in asdict(p).items() if k != "id"}
                          for pid, p in self.products.items()}
         return d
@@ -409,6 +438,25 @@ TEST_SUFFIX = "_test"
 def normalize_code(raw: str) -> str:
     """ค่าที่สแกนได้ = serial ตรง ๆ ตัดช่องว่าง/ขึ้นบรรทัด และทำเป็นตัวพิมพ์ใหญ่"""
     return "".join(raw.split()).upper()
+
+
+def default_serial_regex(app: AppConfig) -> str:
+    """regex เริ่มต้นของโหมดกล้อง: ขึ้นต้นด้วย prefix ของ product ใด product หนึ่ง"""
+    prefixes = sorted({p.prefix.upper() for p in app.products.values() if p.prefix}, key=len, reverse=True)
+    return "^(?:" + "|".join(re.escape(x) for x in prefixes) + ")" if prefixes else ""
+
+
+def serial_pattern(app: AppConfig) -> re.Pattern:
+    return re.compile(app.camera.serial_regex or default_serial_regex(app), re.IGNORECASE)
+
+
+def pick_serial(pattern: re.Pattern, codes: list[str]) -> str | None:
+    """เลือก code แรกที่ตรง pattern (ชิ้นงานอาจมีหลาย code) คืน serial ที่ normalize แล้ว หรือ None"""
+    for raw in codes:
+        code = normalize_code(raw)
+        if code and pattern.search(code):
+            return code
+    return None
 
 
 def verify(store: Store, raw_code: str, en: str, shift: str, workorder: str,

@@ -202,6 +202,43 @@ class ConfigTest(Base):
         self.assertEqual(hl.preview(app, "ceramic_box", 1, now=self.day1), ["CB26110001"])
 
 
+class CameraConfigTest(Base):
+    def test_defaults_and_roundtrip(self):
+        self.assertEqual(self.app.input_mode, "usb")
+        self.assertEqual(self.app.camera.index, "auto")
+        self.app.input_mode = "camera"
+        self.app.camera.index = "1"
+        self.app.camera.serial_regex = r"^CB\d{8}$"
+        self.app.save()
+        app = hl.AppConfig.load(self.dir / "config.json")
+        self.assertEqual((app.input_mode, app.camera.index, app.camera.serial_regex),
+                         ("camera", "1", r"^CB\d{8}$"))
+
+    def test_invalid_values(self):
+        for attr, value in (("serial_regex", "(CB"), ("index", "cam1")):
+            app = hl.AppConfig.load(self.dir / "config.json")
+            setattr(app.camera, attr, value)
+            with self.assertRaises(ValueError):
+                app.validate()
+        app = hl.AppConfig.load(self.dir / "config.json")
+        app.input_mode = "wifi"
+        with self.assertRaises(ValueError):
+            app.validate()
+
+    def test_default_regex_from_prefixes(self):
+        self.assertEqual(hl.default_serial_regex(self.app), "^(?:CB|LD)")
+
+    def test_pick_serial(self):
+        pat = hl.serial_pattern(self.app)
+        codes = ["384008262264500007", "CBYYMM0034"]          # ชิ้นงานจริงมี 2 code
+        self.assertEqual(hl.pick_serial(pat, codes), "CBYYMM0034")
+        self.assertEqual(hl.pick_serial(pat, ["cb2611 0001\r\n"]), "CB26110001")
+        self.assertIsNone(hl.pick_serial(pat, ["384008262264500007"]))
+        self.assertIsNone(hl.pick_serial(pat, []))
+        self.app.camera.serial_regex = r"^\d{18}$"             # ตั้งเองชนะ prefix
+        self.assertEqual(hl.pick_serial(hl.serial_pattern(self.app), codes), "384008262264500007")
+
+
 class PasswordTest(Base):
     def test_hash_and_verify(self):
         h = hl.hash_password("1234")
