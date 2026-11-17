@@ -59,6 +59,7 @@ python -m venv .venv
   - `.env` อยู่ใน .gitignore ห้าม commit
 - Settings → "Verify, FITS และทั่วไป" → ตั้งค่า **Model**, **Operation** และ **Parameters** (บรรทัดละ `ชื่อ parameter = ค่า` เรียงตามลำดับใน FITS)
   - ส่วน "การเชื่อมต่อ" แสดงว่าตั้ง FITS_* ครบหรือยัง แต่ไม่แสดงค่าจริง
+- ค่าคงที่ที่ใช้ได้ในช่อง Parameters: `NA` (ส่งข้อความ NA), `-` (ส่งเครื่องหมาย -), `blank` (ส่งค่าว่าง) เช่น `Failure code = NA`
 - ช่อง Workorder ใส่ WO PN คู่กันได้ เช่น `WO-001 = PN-123`
 
 **โหมด Engineer (TEST)** เลือกได้ที่ช่อง "โหมด" ในหน้า Verify ต้องใส่รหัส Engineer

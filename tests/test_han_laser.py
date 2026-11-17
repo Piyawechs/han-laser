@@ -306,6 +306,13 @@ class FitsCoreTest(Base):
         self.assertEqual(hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"}),
                          (["Unit S/N", "WO PN"], ["S1", "PN1"]))
 
+    def test_constant_values(self):
+        self.app.fits.parameters = [["Result", "result"], ["Failure code", "NA"], ["Remark", "-"],
+                                    ["Empty", "blank"]]
+        self.app.validate()
+        self.assertEqual(hl.fits_log_values(self.app, {"result": "PASS"}),
+                         (["Result", "Failure code", "Remark", "Empty"], ["PASS", "NA", "-", ""]))
+
     def test_value_with_separator_rejected(self):
         self.app.workorder_pn = {"WO1": "P,N"}
         with self.assertRaises(hl.FitsSetupError):

@@ -99,7 +99,10 @@ FITS_SOURCES = {
     "shift": "Shift",
     "product": "Product id",
     "blank": "ค่าว่าง",
+    "-": "ส่งเครื่องหมาย - ตรง ๆ",
+    "NA": "ส่งข้อความ NA ตรง ๆ",
 }
+FITS_CONSTANTS = {"blank": "", "-": "-", "NA": "NA"}   # source ที่เป็นค่าคงที่
 
 
 @dataclass
@@ -542,8 +545,8 @@ def fits_log_values(app: AppConfig, ctx: dict) -> tuple[list, list]:
             val = app.workorder_pn.get(ctx.get("workorder", ""), "")
             if not val:
                 raise FitsSetupError(f"ยังไม่ได้ตั้ง WO PN ของ Workorder {ctx.get('workorder')} (Settings)")
-        elif src == "blank":
-            val = ""
+        elif src in FITS_CONSTANTS:
+            val = FITS_CONSTANTS[src]
         else:
             val = str(ctx.get(src, ""))
         if fs.fsp in val:
