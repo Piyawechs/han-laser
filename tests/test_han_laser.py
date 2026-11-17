@@ -280,7 +280,7 @@ class FitsCoreTest(Base):
     def setUp(self):
         super().setUp()
         self.app.fits = hl.FitsSettings(enabled=True, model="M", operation="OP",
-                                        parameters=[["Taira S/N", "serial"], ["WO PN", "wo_pn"]])
+                                        parameters=[["Unit S/N", "serial"], ["WO PN", "wo_pn"]])
 
     def test_validate(self):
         self.app.fits.parameters = [["X", "nope"]]
@@ -304,7 +304,7 @@ class FitsCoreTest(Base):
             hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"})
         self.app.workorder_pn = {"WO1": "PN1"}
         self.assertEqual(hl.fits_log_values(self.app, {"serial": "S1", "workorder": "WO1"}),
-                         (["Taira S/N", "WO PN"], ["S1", "PN1"]))
+                         (["Unit S/N", "WO PN"], ["S1", "PN1"]))
 
     def test_value_with_separator_rejected(self):
         self.app.workorder_pn = {"WO1": "P,N"}
